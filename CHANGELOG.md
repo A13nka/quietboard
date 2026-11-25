@@ -6,6 +6,13 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Geändert
+- `install.sh` zeigt den Einrichtungscode nur noch, solange kein Konto existiert (beim Update erschien sonst der alte Code).
+- `install.sh` nennt den Installationsordner (`QB_DIR`, Standard `~/quietboard`) und zeigt am Ende nummerierte nächste Schritte – inklusive „diesen Server selbst als Host anbinden“.
+
+### Behoben
+- Beszel-Agent als Binary: eigenes beschreibbares `/tmp` (`PrivateTmp`), damit die Health-Datei angelegt werden kann (vorher „read-only file system“ im Journal).
+
 ## 0.2.1 – 2026-11-25
 
 ### Behoben

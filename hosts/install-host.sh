@@ -100,6 +100,8 @@ StateDirectory=beszel-agent
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
+# eigenes, beschreibbares /tmp: der Agent legt dort seine Health-Datei ab (sonst "read-only file system")
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target
