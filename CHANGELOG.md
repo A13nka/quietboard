@@ -6,6 +6,8 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+## 0.2.1 – 2026-11-25
+
 ### Behoben
 - Listen auf schmalen Bildschirmen: Host- und Job-Namen werden nicht mehr abgeschnitten („docke…“). Bei Platzmangel werden zuerst die kleinen Schilder ausgeblendet, dann bricht die Zusatzinfo rechts um; nur sehr lange Titel werden gekürzt.
 
