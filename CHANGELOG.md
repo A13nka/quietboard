@@ -6,6 +6,8 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+## 0.3.0 – 2026-11-25
+
 ### Neu
 - **Host-Einstellungen in der Oberfläche:** „läuft dauerhaft“ (sonst Zeitfenster, z. B. NAS nachts) und Weblinks je Host; haben Vorrang vor `checks.yaml`. **Host entfernen** löscht ihn in Beszel samt Verlauf, Update-Berichten und Einstellungen.
 - **API-Tokens** für eigene Skripte (System → API-Tokens): Rechte wie das Konto, nur einmal sichtbar, „zuletzt benutzt“, widerrufbar.
