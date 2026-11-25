@@ -6,6 +6,8 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+## 0.4.0 – 2026-11-25
+
 ### Neu
 - **Englische Oberfläche:** Anmeldung und App auf Deutsch und Englisch; Sprache nach Browser, umstellbar unter System → Konto. Ein Test stellt sicher, dass jeder Text eine Übersetzung hat.
 - **Sprache der Meldungen** (Morgenmeldung, Push, Mail, Signal, „Braucht Aufmerksamkeit“) unter System → Benachrichtigungen; Vorbelegung mit `LANGUAGE` in `.env`.
