@@ -6,6 +6,17 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Neu
+- **Jobs in der Oberfläche anlegen, bearbeiten und löschen** – mit Vorlagen (Backup-Skript, Cronjob, Zertifikat, Proxmox VE, Proxmox Backup Server, Software mit Ping-URL). Nach dem Anlegen und in jeder Job-Zeile steht eine fertig ausgefüllte Anleitung (hc-Befehl, Cron-Zeile, Ping-Adresse oder Proxmox-Webhook) mit Kopieren-Knöpfen. `checks.yaml` bleibt als Alternative.
+- Proxmox-Webhooks treffen auch Jobs, die in der Oberfläche angelegt wurden.
+- `QB_DATA_DIR=/pfad` beim Installieren: Daten in Ordnern statt Docker-Volumes; Doku „Daten in eigenen Ordnern“ inkl. Umzug bestehender Installationen.
+- Knopf ↻ holt die Daten sofort neu; neue Hosts erscheinen direkt nach ihrem ersten Bericht.
+
+### Behoben
+- Übersicht zeigte „0/0 Hosts“, solange Hosts nicht in `checks.yaml` eingetragen waren – jetzt zählen alle Hosts (außer solchen mit Zeitfenster).
+- „Kopieren“ funktionierte ohne HTTPS (Zugriff über `http://<IP>`) nicht.
+- Prioritätswechsel stellt jetzt auch die Benachrichtigungswege in Healthchecks passend ein.
+
 ## 0.1.2 – 2026-11-25
 
 ### Geändert

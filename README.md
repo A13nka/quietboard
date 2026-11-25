@@ -51,7 +51,8 @@ QuietBoard installs both, configures them for you and puts one calm view on top 
 - **One command per host** – Beszel agent (Docker or binary), job helper `hc`, update report and automatic security updates. Debian, Ubuntu, Proxmox and Synology.
 - **No cloud required** – runs entirely in your LAN or VPN. Cloudflare, Tailscale and friends are optional.
 - **Accounts and roles** – admins and read-only users, login throttling, optional Cloudflare Access.
-- **Scriptable** – every action is also available via API, CLI or YAML (`checks.yaml`).
+- **Jobs in a few clicks** – templates for backup scripts, cron jobs, certificates, Proxmox VE/PBS and tools with a ping URL; QuietBoard shows exactly what to put where. Prefer files? `checks.yaml` works too.
+- **Scriptable** – every action is also available via the API.
 
 ## Quick start
 

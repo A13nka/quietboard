@@ -39,7 +39,7 @@ Host anbinden – auf jedem Host ausführen, auch auf diesem Server (als root od
   curl -fsSL -H "Authorization: Bearer …" http://192.0.2.10:8088/api/install/host.sh | bash
 ```
 
-Optionen per Umgebung vor `bash`: `QB_VERSION=v0.1.0` (bestimmte Version), `PUBLIC_HOST=status.example.org` (Adresse, unter der Hosts den Server erreichen), `TZ=Europe/Berlin`, `SITE_NAME=Homelab`, `QB_DIR=/opt/quietboard`.
+Optionen per Umgebung vor `bash`: `QB_VERSION=v0.2.0` (bestimmte Version), `PUBLIC_HOST=status.example.org` (Adresse, unter der Hosts den Server erreichen), `TZ=Europe/Berlin`, `SITE_NAME=Homelab`, `QB_DIR=/opt/quietboard`, `QB_DATA_DIR=/srv/quietboard` (Daten in Ordnern statt Docker-Volumes, siehe [Daten in eigenen Ordnern](storage.md)).
 
 ## Erste Schritte nach der Installation
 

@@ -10,6 +10,8 @@
 
 ## Sichern
 
+Liegen die Daten in Ordnern statt in Volumes, geht es einfacher – siehe [Daten in eigenen Ordnern](storage.md#sichern).
+
 ```bash
 cd ~/quietboard
 docker compose stop

@@ -23,11 +23,14 @@ Alle Funktionen der Oberfläche laufen über diese API. Basis: `http://<server>:
 
 | Methode, Pfad | Rolle | Zweck |
 | --- | --- | --- |
-| `GET /api/state` | alle | Gesamtzustand: Zusammenfassung, Aufmerksamkeit, Checks, Hosts, Updates, Meldungen |
+| `GET /api/state` | alle | Gesamtzustand: Zusammenfassung, Aufmerksamkeit, Checks, Hosts, Updates, Meldungen (`?fresh=1`: vorher neu abfragen, höchstens alle 10 s) |
 | `GET /api/check/{uuid}/log` | alle | letzter Lauf eines Checks mit Log |
 | `GET /api/settings` · `PUT /api/settings` | alle · Admin | `mail_to`, `digest_time` |
 | `POST /api/notify/test` | Admin (Push: alle) | `{"channel":"mail\|push\|signal"}` |
 | `POST /api/digest/test` | Admin | Morgenmeldung jetzt senden |
+| `POST /api/checks` | Admin | Job anlegen: `{"host","job","mode":"cron\|period","schedule"\|"period","grace","prio","typ","src":"hc\|url\|pve\|pbs","ev","job_id","ds","desc"}` |
+| `GET` · `PUT` · `DELETE /api/checks/{uuid}` | Admin | Job lesen (Formularwerte) · ändern · löschen |
+| `GET /api/jobs/help` | Admin | Ping-Adresse, Webhook-Adresse, Token, bekannte Hosts (für Anleitungen) |
 | `POST /api/checks/{uuid}/pause\|resume` | Admin | Check pausieren/fortsetzen |
 | `POST /api/checks/{uuid}/prio` | Admin | `{"prio":"kritisch\|normal\|info"}` |
 | `GET /api/hosts/install-command` · `GET /api/agent` | Admin | Host-Befehl · Agent-Werte (KEY, TOKEN, HUB_URL) |

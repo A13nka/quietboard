@@ -102,6 +102,20 @@ expect "Priorität auf kritisch" curl -fsS -o /dev/null "${H[@]}" -d '{"prio":"k
 expect "Priorität übernommen" state_ok "any(c['uuid']=='$uuid' and c['prio']=='kritisch' for c in d['checks'])"
 expect "Check fortsetzen" curl -fsS -o /dev/null "${H[@]}" -X POST "$S/api/checks/$uuid/resume"
 
+echo "== Jobs in der Oberfläche: anlegen, Proxmox-Webhook, bearbeiten, löschen"
+expect "Job anlegen (PVE-Backup)" curl -fsS -o /dev/null "${H[@]}" \
+  -d '{"host":"pve","job":"backup","mode":"cron","schedule":"0 1 * * *","grace":"3h","prio":"kritisch","typ":"backup","src":"pve","ev":"vzdump"}' "$S/api/checks"
+expect "Doppelter Job abgelehnt (409)" test "$(curl -s -o /dev/null -w '%{http_code}' "${H[@]}" -d '{"host":"pve","job":"backup","schedule":"0 1 * * *"}' "$S/api/checks")" = 409
+expect "Ungültiger Cron abgelehnt (400)" test "$(curl -s -o /dev/null -w '%{http_code}' "${H[@]}" -d '{"host":"x","job":"y","schedule":"99 1 * * *"}' "$S/api/checks")" = 400
+curl -fsS -o /dev/null -H "Authorization: Bearer $INGEST_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"severity":"info","title":"vzdump backup status: successful","message":"ok","fields":{"type":"vzdump"}}' "$S/api/ingest/pve?source=pve&host=pve"
+wait_until "PVE-Webhook meldet den Job grün" 20 state_ok "any(c['name']=='pve/backup' and c['status']=='up' for c in d['checks'])"
+juuid=$(curl -fsS -b "$JAR" "$S/api/state" | python3 -c "import json,sys; print([c['uuid'] for c in json.load(sys.stdin)['checks'] if c['name']=='pve/backup'][0])")
+expect "Job bearbeiten (Intervall, info)" curl -fsS -o /dev/null "${H[@]}" -X PUT -d '{"mode":"period","period":"1d","grace":"2h","prio":"info","typ":"backup","src":"pve","ev":"vzdump"}' "$S/api/checks/$juuid"
+expect "Änderung übernommen" sh -c "curl -fsS -b '$JAR' '$S/api/checks/$juuid' | grep -q '\"period\":\"1d\"'"
+expect "Job löschen" curl -fsS -o /dev/null "${H[@]}" -X DELETE "$S/api/checks/$juuid"
+expect "Job ist weg" state_ok "not any(c['name']=='pve/backup' for c in d['checks'])"
+
 # Mail über Mailpit: Empfänger setzen, Test senden, Morgenmeldung
 expect "Mail-Empfänger speichern" curl -fsS -o /dev/null "${H[@]}" -X PUT -d '{"mail_to":"ops@example.org","digest_time":"06:45"}' "$S/api/settings"
 expect "Test-Mail senden" curl -fsS -o /dev/null "${H[@]}" -d '{"channel":"mail"}' "$S/api/notify/test"
@@ -114,6 +128,7 @@ VJAR=$(mktemp)
 expect "Betrachter meldet sich an" curl -fsS -o /dev/null -c "$VJAR" -H 'Content-Type: application/json' -d '{"email":"viewer@example.org","password":"'"$PW"'"}' "$S/api/auth/login"
 expect "Betrachter sieht den Zustand" curl -fsS -o /dev/null -b "$VJAR" "$S/api/state"
 expect "Betrachter bekommt keinen Host-Befehl (403)" test "$(curl -s -o /dev/null -w '%{http_code}' -b "$VJAR" "$S/api/hosts/install-command")" = 403
+expect "Betrachter darf keine Jobs anlegen (403)" test "$(curl -s -o /dev/null -w '%{http_code}' -b "$VJAR" -H "Origin: $S" -H 'Content-Type: application/json' -d '{"host":"a","job":"b","schedule":"0 1 * * *"}' "$S/api/checks")" = 403
 expect "Fremde Seite darf nicht schreiben (403)" test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H 'Origin: https://evil.example' -H 'Content-Type: application/json' -X PUT -d '{}' "$S/api/settings")" = 403
 rm -f "$VJAR"
 
