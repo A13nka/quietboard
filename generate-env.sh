@@ -17,7 +17,7 @@ fill() { # <name> <wert>   – setzt nur, wenn der Eintrag fehlt oder leer ist
 }
 
 # Werte aus der Umgebung übernehmen (für die Installation mit einem Befehl / Automatisierung)
-for v in ADMIN_EMAIL TZ SITE_NAME STATUS_IMAGE ALLOW_NO_AUTH POLL_SECONDS DEMO BIND_ADDR SMTP_HOST SMTP_PORT SMTP_TLS SMTP_USER SMTP_FROM BESZEL_ALERT_DOWN_MIN QB_VERSION; do
+for v in ADMIN_EMAIL TZ SITE_NAME STATUS_IMAGE ALLOW_NO_AUTH POLL_SECONDS DEMO BIND_ADDR SMTP_HOST SMTP_PORT SMTP_TLS SMTP_USER SMTP_FROM BESZEL_ALERT_DOWN_MIN QB_VERSION LANGUAGE; do
   if [ -n "${!v:-}" ]; then
     grep -v "^$v=" .env > .env.tmp || true
     echo "$v=${!v}" >> .env.tmp && cat .env.tmp > .env && rm -f .env.tmp

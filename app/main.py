@@ -32,8 +32,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, bootstrap, config, push
+from . import auth, bootstrap, config, i18n, push
 from . import jobs as jobs_mod
+from .i18n import tr
 
 log = logging.getLogger("status")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
@@ -93,6 +94,7 @@ NO_KEEPALIVE = httpx.Limits(max_keepalive_connections=0)
 # ---------------------------------------------------------------- Persistenz
 DATA.mkdir(parents=True, exist_ok=True)
 STORE = auth.Store(DATA / "quietboard.db")  # Konten, Sitzungen, Einstellungen
+i18n.set_language_source(lambda: STORE.get_setting("language") or (E("LANGUAGE", "") or "de")[:2])
 
 
 def _load(name: str, default):
@@ -248,9 +250,11 @@ async def check_transitions() -> None:
             continue
         url = f"/?c={c['uuid']}"
         if cur == "down":
-            await push_all(f"🔴 {c['name']} ausgefallen", "Kein Ping zur erwarteten Zeit oder Fehler gemeldet.", url, c["uuid"])
+            await push_all(
+                "🔴 " + tr("{name} ausgefallen", name=c["name"]), tr("Kein Ping zur erwarteten Zeit oder Fehler gemeldet."), url, c["uuid"]
+            )
         elif prev == "down" and cur == "up":
-            await push_all(f"✅ {c['name']} wieder OK", "", url, c["uuid"])
+            await push_all("✅ " + tr("{name} wieder OK", name=c["name"]), "", url, c["uuid"])
     if changed:
         _save("push_state.json", push_state)
 
@@ -503,7 +507,9 @@ async def check_sec_overdue() -> None:
             f["sec_alerted"] = sig
             changed = True
             await send_signal(
-                f"🟠 {name}: {h['sec_overdue']} Security-Update(s) seit über {SEC_GRACE_H} h offen\n"
+                "🟠 "
+                + tr("{name}: {n} Security-Update(s) seit über {h} h offen", name=name, n=h["sec_overdue"], h=SEC_GRACE_H)
+                + "\n"
                 + ", ".join(h["sec_overdue_pkgs"][:6]),
                 url="/?t=up",
             )
@@ -524,13 +530,13 @@ def attention() -> list[dict]:
                     "level": "bad" if c["status"] == "down" else "warn",
                     "kind": "check",
                     "title": c["name"],
-                    "detail": "überfällig/fehlgeschlagen" if c["status"] == "down" else "Karenzzeit läuft",
+                    "detail": tr("überfällig/fehlgeschlagen") if c["status"] == "down" else tr("Karenzzeit läuft"),
                     "uuid": c["uuid"],
                 }
             )
     for h in state["hosts"]:
         if host_extra(h["name"])["always_on"] and h["status"] not in ("up", "paused"):
-            items.append({"level": "bad", "kind": "host", "title": f"{h['name']} offline", "detail": h["status"]})
+            items.append({"level": "bad", "kind": "host", "title": tr("{name} offline", name=h["name"]), "detail": h["status"]})
         if (h.get("disk") or 0) >= 90:
             items.append({"level": "warn", "kind": "host", "title": f"{h['name']} · Disk", "detail": f"{h['disk']:.0f} %"})
     for h in host_updates():
@@ -539,8 +545,8 @@ def attention() -> list[dict]:
                 {
                     "level": "bad",
                     "kind": "update",
-                    "title": f"{h['host']} · Security-Update überfällig",
-                    "detail": f"seit über {SEC_GRACE_H} h offen: " + ", ".join(h["sec_overdue_pkgs"][:3]),
+                    "title": tr("{host} · Security-Update überfällig", host=h["host"]),
+                    "detail": tr("seit über {h} h offen: {pkgs}", h=SEC_GRACE_H, pkgs=", ".join(h["sec_overdue_pkgs"][:3])),
                 }
             )
     cutoff = (now() - dt.timedelta(hours=24)).isoformat()
@@ -575,21 +581,23 @@ def summary() -> dict:
 def digest_text() -> str:
     s = summary()
     att = attention()
-    head = "☀️ " + SITE_NAME + " " + now().strftime("%H:%M") + (" – alles grün" if not att else f" – {len(att)} Punkt(e) offen")
+    head = (
+        "☀️ " + SITE_NAME + " " + now().strftime("%H:%M") + " – " + (tr("alles grün") if not att else tr("{n} Punkt(e) offen", n=len(att)))
+    )
     lines = [head]
     for a in att[:8]:
         lines.append(("🔴 " if a["level"] == "bad" else "🟡 ") + f"{a['title']}: {a['detail']}")
     lines.append(f"Jobs {s['checks_ok']}/{s['checks_total']} · Hosts {s['hosts_up']}/{s['hosts_total']}")
     for h in state["hosts"]:  # Hosts mit Zeitfenster (always_on: false): wann zuletzt gesehen
         if not host_extra(h["name"])["always_on"] and h.get("updated"):
-            lines.append(f"{h['name']} zuletzt gesehen: {h['updated'][:16].replace('T', ' ')}")
+            lines.append(tr("{name} zuletzt gesehen: {t}", name=h["name"], t=h["updated"][:16].replace("T", " ")))
     lines.append(
-        f"Updates: {s['upd_hosts']} Hosts · {s['updates']} Pakete · Security {s['security']}"
-        + (f" (überfällig {s['sec_overdue']})" if s["sec_overdue"] else "")
-        + (f" · Neustart nötig: {s['reboot_hosts']}" if s["reboot_hosts"] else "")
+        tr("Updates: {h} Hosts · {p} Pakete · Security {s}", h=s["upd_hosts"], p=s["updates"], s=s["security"])
+        + (tr(" (überfällig {n})", n=s["sec_overdue"]) if s["sec_overdue"] else "")
+        + (tr(" · Neustart nötig: {n}", n=s["reboot_hosts"]) if s["reboot_hosts"] else "")
     )
     if state["errors"]:
-        lines.append("⚠️ Quellen: " + ", ".join(f"{k}" for k in state["errors"]))
+        lines.append("⚠️ " + tr("Quellen: {q}", q=", ".join(state["errors"])))
     return "\n".join(lines)
 
 
@@ -960,9 +968,11 @@ async def ingest_pve(request: Request, source: str = "pve", host: str = "pve"):
     else:
         # Unbekanntes Event: nie still verschlucken, wenn es ein Fehler ist
         prio = "normal" if failed else "info"
-        add_event(source, f"{host}: {title} (ohne Check)", message, prio)
+        add_event(source, tr("{host}: {title} (ohne Check)", host=host, title=title), message, prio)
         if failed:
-            await send_signal(f"🔴 {host}: {title}\n(kein passender Job – unter Jobs anlegen)", dedup_key=f"pve:{host}:{title}")
+            await send_signal(
+                f"🔴 {host}: {title}\n(" + tr("kein passender Job – unter Jobs anlegen") + ")", dedup_key=f"pve:{host}:{title}"
+            )
     return {"ok": True, "matched": [c["name"] for c in hits]}
 
 
@@ -1059,7 +1069,7 @@ async def push_unsubscribe(request: Request):
 
 @app.post("/api/push/test")
 async def push_test():
-    return {"sent": await push_all("🔔 Test", "Mitteilungen der Status-App funktionieren.", "/", "test"), "devices": len(push_subs)}
+    return {"sent": await push_all("🔔 Test", tr("Mitteilungen von QuietBoard funktionieren."), "/", "test"), "devices": len(push_subs)}
 
 
 @app.post("/api/digest/test")
@@ -1197,6 +1207,7 @@ def _settings() -> dict:
         "mail_to": mail_recipients(),
         "digest_time": STORE.get_setting("digest_time") or (cfg.get("settings") or {}).get("digest_time", "07:00"),
         "channels": {"mail": bool(SMTP["host"]), "push": bool(VAPID), "signal": bool(SIGNAL_NUMBER and SIGNAL_RECIPIENT)},
+        "language": i18n.lang(),
     }
 
 
@@ -1255,6 +1266,10 @@ async def settings_put(request: Request):
         if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t):
             raise HTTPException(400, "Uhrzeit im Format HH:MM")
         STORE.set_setting("digest_time", t)
+    if "language" in b:
+        if b["language"] not in i18n.LANGUAGES:
+            raise HTTPException(400, "Sprache: de oder en")
+        STORE.set_setting("language", b["language"])
     return _settings()
 
 
@@ -1263,21 +1278,21 @@ async def notify_test(request: Request):
     b = await _body(request)
     channel = b.get("channel")
     if channel == "push":
-        return {"ok": bool(await push_all("🔔 Test", "Mitteilungen von QuietBoard funktionieren.", "/", "test"))}
+        return {"ok": bool(await push_all("🔔 Test", tr("Mitteilungen von QuietBoard funktionieren."), "/", "test"))}
     require_admin(request)
     if channel == "mail":
         if not SMTP["host"]:
             raise HTTPException(400, "Kein SMTP-Server in .env (SMTP_HOST)")
         if not mail_recipients():
             raise HTTPException(400, "Keine Empfänger eingetragen")
-        ok = await send_mail(f"[{SITE_NAME}] Test", "Mails von QuietBoard kommen an.")
+        ok = await send_mail(f"[{SITE_NAME}] Test", tr("Mails von QuietBoard kommen an."))
         if not ok:
             raise HTTPException(502, "Versand fehlgeschlagen – Log der App prüfen")
         return {"ok": True}
     if channel == "signal":
         if not (SIGNAL_NUMBER and SIGNAL_RECIPIENT):
             raise HTTPException(400, "Signal nicht eingerichtet")
-        return {"ok": await send_signal("🔔 Test von QuietBoard")}
+        return {"ok": await send_signal("🔔 " + tr("Test von QuietBoard"))}
     raise HTTPException(400, "Unbekannter Kanal")
 
 

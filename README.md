@@ -52,6 +52,7 @@ QuietBoard installs both, configures them for you and puts one calm view on top 
 - **No cloud required** – runs entirely in your LAN or VPN. Cloudflare, Tailscale and friends are optional.
 - **Accounts and roles** – admins and read-only users, API tokens for your own scripts, login throttling, optional Cloudflare Access.
 - **Jobs in a few clicks** – templates for backup scripts, cron jobs, certificates, Proxmox VE/PBS and tools with a ping URL; QuietBoard shows exactly what to put where. Prefer files? `checks.yaml` works too.
+- **English and German** – the interface follows your browser; notifications have their own language setting.
 - **Scriptable** – every action is also available via the API.
 
 ## Quick start
@@ -111,7 +112,7 @@ The [documentation](https://a13nka.github.io/quietboard/) covers installation an
 
 ## Roadmap
 
-- English UI and docs
+- English documentation
 - Update reports for more NAS systems (UGREEN, QNAP, TrueNAS, Unraid)
 - More job templates (restic/borg wrappers, Home Assistant, databases)
 
