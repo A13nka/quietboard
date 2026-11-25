@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import datetime as dt
 
+from .i18n import tr
+
 HOSTS = [
     # name, status, cpu, mem, disk
     ("proxmox", "up", 12.0, 61.0, 48.0),
@@ -87,7 +89,7 @@ def apply(state: dict, updates: dict, flags: dict, events: list, now: dt.datetim
         {
             "ts": iso(now - dt.timedelta(hours=2)),
             "source": "notify",
-            "title": "docker01: restic-offsite fehlgeschlagen",
+            "title": tr("{name} fehlgeschlagen", name="docker01: restic-offsite"),
             "message": "Fatal: unable to open repository (demo)",
             "prio": "normal",
         },

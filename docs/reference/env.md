@@ -30,6 +30,7 @@
 | `BIND_ADDR` | nur auf dieser Adresse lauschen (z. B. VPN-IP) |
 | `HC_EXTRA_HOSTS` | weitere Namen/IPs, unter denen Healthchecks erreichbar sein soll (Komma-getrennt) |
 | `STATUS_PORT`, `HC_PORT`, `BESZEL_PORT` | andere Host-Ports (Standard 8088, 8000, 8090) |
+| `LANGUAGE` | `de` | Sprache der Meldungen (`de` oder `en`), solange sie nicht in der App umgestellt wurde |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Mail für QuietBoard und Healthchecks |
 | `VAPID_SUBJECT` | Kontakt für Push-Dienste (`mailto:…`) |
 | `BESZEL_ALERT_DOWN_MIN` | Minuten bis zum Offline-Alarm neuer Hosts (Standard 5) |

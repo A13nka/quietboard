@@ -51,6 +51,7 @@ services:
       <<: *admin
       TZ: ${TZ:-UTC}
       SITE_NAME: ${SITE_NAME:-Homelab}
+      LANGUAGE: ${LANGUAGE:-}
       CHECKS_FILE: ${CHECKS_FILE:-/config/checks.yaml}
       POLL_SECONDS: ${POLL_SECONDS:-60}
       BESZEL_ALERT_DOWN_MIN: ${BESZEL_ALERT_DOWN_MIN:-5}

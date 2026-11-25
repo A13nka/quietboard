@@ -23,6 +23,12 @@ Benutzer anlegen unter **System → Benutzer**. Passwörter: mindestens 10 Zeich
 
 Healthchecks und Beszel haben eigene Admin-Zugänge: `ADMIN_EMAIL` und `ADMIN_PASSWORD` aus `.env`.
 
+## Sprache
+
+Die Oberfläche gibt es auf Deutsch und Englisch. Sie folgt der Sprache des Browsers; umstellen lässt sie sich unter **System → Konto → Sprache** (gilt für diesen Browser).
+
+Meldungen, die der Server erzeugt – Morgenmeldung, Push, Mail, Signal und „Braucht Aufmerksamkeit“ –, haben eine eigene Einstellung: **System → Benachrichtigungen → Sprache der Meldungen** (Admins; Standard Deutsch, vorbelegbar mit `LANGUAGE=en` in `.env`).
+
 ## API-Tokens für eigene Skripte
 
 Unter **System → API-Tokens** legt jeder Benutzer Tokens für eigene Skripte an (z. B. für Home Assistant oder ein Dashboard). Ein Token hat dieselben Rechte wie das Konto – ein Token eines Betrachters kann also nur lesen.
