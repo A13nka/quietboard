@@ -23,7 +23,7 @@ In `.env` die Werte der alten Installation eintragen, **bevor** `generate-env.sh
 | `HC_PUBLIC_URL`, `HC_PING_ENDPOINT`, `BESZEL_PUBLIC_URL` | die bisherigen Adressen (`SITE_ROOT`, `PING_ENDPOINT`, `APP_URL`) |
 | `HC_EXTRA_HOSTS` | weitere Namen/IPs aus dem alten `ALLOWED_HOSTS` |
 | `SMTP_*` | die alten `EMAIL_*`-Werte von Healthchecks |
-| `ADMIN_EMAIL` | eine **neue** Adresse, die es in Beszel noch nicht gibt (z. B. `quietboard@example.org`). QuietBoard legt damit in Beszel einen eigenen Admin, einen Nur-Lesen-Zugang und einen Agent-Token für neue Hosts an. Eine vorhandene Adresse bekäme ein neues Beszel-Passwort |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Dein bisheriger Beszel-Login (empfohlen) **oder** eine neue Adresse. QuietBoard nutzt diesen Beszel-Admin für den Nur-Lesen-Zugang, den Agent-Token neuer Hosts und die Standard-Alarme. Bei der bisherigen Adresse gilt danach `ADMIN_PASSWORD` als Beszel-Passwort – trägst du dort dein jetziges Passwort ein, ändert sich nichts. Beszel-Mails dieses Kontos übernimmt QuietBoard (Mail-Kanal) |
 | `BESZEL_APP_USER`, `BESZEL_APP_PASS` | **leer lassen** – QuietBoard richtet seinen Zugang selbst ein |
 | `SIGNAL_*`, `TUNNEL_TOKEN`, `ACCESS_*`, `VAPID_PRIVATE_KEY`, `PBS_TARGETS` | wie bisher, falls genutzt (gleicher VAPID-Schlüssel = vorhandene Push-Abos bleiben) |
 
@@ -54,6 +54,6 @@ docker compose logs healthchecks-init        # muss „keine Änderung (Übernah
 
 Prüfen: In der App erscheinen alle Checks und Hosts, *System* zeigt Healthchecks und Beszel verbunden. Hosts, `hc`-Pings und Agents laufen unverändert weiter.
 
-Der App-Container ist im Docker-Netz auch unter dem Namen `status-app` erreichbar. Tunnel-Ziele und Beszel-Webhooks einer Vorgänger-App mit diesem Namen funktionieren also weiter.
+Der App-Container ist im Docker-Netz auch unter dem Namen `status-app` erreichbar. Tunnel-Ziele und Beszel-Webhooks einer Vorgänger-App mit diesem Namen funktionieren also weiter; einen zweiten Webhook zur App legt QuietBoard dann nicht an.
 
 **Zurück:** `docker compose down` in `~/quietboard`, dann die alte Installation wieder starten – die Daten bleiben kompatibel. Vorher trotzdem [sichern](backup.md).

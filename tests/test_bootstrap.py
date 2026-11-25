@@ -175,3 +175,13 @@ def test_alerts_done_is_persisted(dirs):
     bootstrap.mark_alerts_done({"sys1"})
     bootstrap.mark_alerts_done({"sys2"})
     assert bootstrap.alerts_done() == {"sys1", "sys2"}
+
+
+def test_alerts_keep_existing_app_webhook_of_predecessor(dirs):
+    """Übernahme: Ein vorhandener Webhook zur App (alter Containername) wird nicht verdoppelt."""
+    fake = FakeBeszel()
+    run(fake)
+    run_alerts(fake, {"sys1"}, webhook="generic://status-app:8080/api/ingest/beszel?template=json")
+    run_alerts(fake, {"sys2"})  # QuietBoard mit seinem eigenen Webhook-Namen
+    rec = next(iter(fake.settings.values()))["settings"]
+    assert rec["webhooks"] == ["generic://status-app:8080/api/ingest/beszel?template=json"]

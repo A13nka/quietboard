@@ -23,7 +23,7 @@ Put the values of the old installation into `.env` **before** running `generate-
 | `HC_PUBLIC_URL`, `HC_PING_ENDPOINT`, `BESZEL_PUBLIC_URL` | the previous addresses (`SITE_ROOT`, `PING_ENDPOINT`, `APP_URL`) |
 | `HC_EXTRA_HOSTS` | further names/IPs from the old `ALLOWED_HOSTS` |
 | `SMTP_*` | the old `EMAIL_*` values of Healthchecks |
-| `ADMIN_EMAIL` | a **new** address that does not exist in Beszel yet (e.g. `quietboard@example.org`). QuietBoard uses it to create its own admin, a read-only login and an agent token for new hosts in Beszel. An existing address would get a new Beszel password |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | your existing Beszel login (recommended) **or** a new address. QuietBoard uses this Beszel admin for its read-only login, the agent token for new hosts and the default alerts. With your existing address, `ADMIN_PASSWORD` becomes the Beszel password – put your current password there and nothing changes. QuietBoard takes over Beszel mails of this account (mail channel) |
 | `BESZEL_APP_USER`, `BESZEL_APP_PASS` | **leave empty** – QuietBoard sets up its own access |
 | `SIGNAL_*`, `TUNNEL_TOKEN`, `ACCESS_*`, `VAPID_PRIVATE_KEY`, `PBS_TARGETS` | as before, if used (same VAPID key = existing push subscriptions keep working) |
 
@@ -54,6 +54,6 @@ docker compose logs healthchecks-init        # must report “keine Änderung (�
 
 Check: all checks and hosts appear in the app, *System* shows Healthchecks and Beszel connected. Hosts, `hc` pings and agents keep running unchanged.
 
-Inside the Docker network the app container is also reachable as `status-app`. Tunnel targets and Beszel webhooks of a predecessor app with that name keep working.
+Inside the Docker network the app container is also reachable as `status-app`. Tunnel targets and Beszel webhooks of a predecessor app with that name keep working; QuietBoard then does not add a second webhook to the app.
 
 **Back:** `docker compose down` in `~/quietboard`, then start the old installation again – the data stays compatible. Still make a [backup](backup.md) first.

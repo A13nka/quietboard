@@ -234,8 +234,11 @@ async def ensure_beszel_alerts(
         rec = items[0]
         settings = dict(rec.get("settings") or {})
         hooks = list(settings.get("webhooks") or [])
-        if webhook not in hooks or settings.get("emails"):
-            settings.update(webhooks=[*hooks, webhook] if webhook not in hooks else hooks, emails=[])  # Mails verschickt die App
+        # Schon ein Webhook zur App vorhanden (z. B. einer Vorgänger-App unter „status-app“)? Dann keinen zweiten,
+        # sonst käme jeder Alarm doppelt an.
+        has_app_hook = any("/api/ingest/beszel" in h for h in hooks)
+        if not has_app_hook or settings.get("emails"):
+            settings.update(webhooks=hooks if has_app_hook else [*hooks, webhook], emails=[])  # Mails verschickt die App
             settings.setdefault("chartTime", "1h")
             r = await cli.patch(f"/api/collections/user_settings/records/{rec['id']}", json={"settings": settings}, headers=h)
             r.raise_for_status()
