@@ -6,6 +6,18 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Geändert
+- Name in der Oberfläche, in Meldungen und in der Doku: **QuietBoard** (technische Namen wie Image, Ordner und Volumes bleiben `quietboard`).
+- Neues Repository mit frischer Historie; README auf Englisch und Deutsch neu gestaltet (Screenshots, Schnellstart, Diagramm), Logo in der Doku.
+
+### Neu
+- `AGENTS.md` mit Regeln für Mitwirkende und Coding-Agents; `make screenshots` erzeugt die README-Bilder aus dem Demo-Modus.
+
+### Behoben
+- `install.sh`: Der Hinweis „Host-Installer noch nicht bereit“ zeigte den Einrichtungscode statt des HTTP-Status.
+- `generate-env.sh` brach auf macOS ohne Meldung ab (`hostname -I` fehlt dort).
+- Release-Workflow: Image-Name für die SBOM wird aus dem Repository abgeleitet statt fest eingetragen.
+
 ## 0.1.1 – 2026-11-25
 
 ### Neu

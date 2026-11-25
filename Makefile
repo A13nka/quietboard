@@ -8,7 +8,7 @@ PY    := $(VENV)/bin/python
 export PYTHONPYCACHEPREFIX := $(CACHE)/pycache
 export RUFF_CACHE_DIR      := $(CACHE)/ruff
 
-.PHONY: help setup env notices configs dist release dev dev-fakehost down logs test lint check-private e2e
+.PHONY: help setup env notices configs dist release dev dev-fakehost down logs test lint check-private e2e screenshots
 
 help:   ## Diese Übersicht
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-15s %s\n", $$1, $$2}'
@@ -59,6 +59,9 @@ dist:   ## Release-Dateien lokal bauen: make dist VERSION=0.1.0 (Paket, install.
 
 release: ## Release erstellen: make release VERSION=0.1.0 (Tag → Image vX.Y.Z, vX.Y, vX, latest)
 	scripts/release.sh $(VERSION)
+
+screenshots: ## README-Screenshots aus dem laufenden Demo-Modus (make dev) neu erzeugen
+	node scripts/screenshots.mjs
 
 e2e:    ## frische Installation in Wegwerf-Projekt hochfahren und prüfen (wie CI)
 	scripts/e2e.sh
