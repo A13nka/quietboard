@@ -25,7 +25,7 @@ Web Push needs HTTPS. On the iPhone also the installed app (Add to Home Screen) 
 About 350 MB for the whole stack, about 530 MB with Signal. 1 GB RAM is enough, 2 GB is comfortable.
 
 **Can I keep using my existing Healthchecks/Beszel?**
-Yes: set `HC_API_KEY`, `HC_PING_KEY`, `BESZEL_APP_USER`, `BESZEL_APP_PASS` in `.env`; the self-setup is then skipped. You can disable the bundled containers in your own `compose.override.yaml`.
+Yes – see [Adopting an existing installation](install/adopt.md). Checks, history, hosts and agents stay; nothing changes on the hosts.
 
 **Is QuietBoard a replacement for Uptime Kuma?**
 No, rather a complement: Uptime Kuma checks whether services are reachable. QuietBoard takes care of hosts, jobs (backups!) and updates – and bundles everything into one calm message.

@@ -24,6 +24,7 @@ nav:
       - Updates and versions: install/update.md
       - Data in your own folders: install/storage.md
       - Backup, migration, uninstall: install/backup.md
+      - Adopting an existing installation: install/adopt.md
   - Hosts:
       - hosts/index.md
       - Proxmox VE and PBS: hosts/proxmox.md

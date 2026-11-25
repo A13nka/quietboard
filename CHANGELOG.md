@@ -6,6 +6,9 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Neu
+- **Bestehende Healthchecks/Beszel-Installation übernehmen** (Doku DE/EN): Sind `HC_API_KEY` und `HC_PING_KEY` gesetzt, ändert `healthchecks-init` nichts mehr (vorher wurden API-Key und Admin-Passwort neu gesetzt). Der App-Container ist zusätzlich als `status-app` erreichbar. e2e prüft beides.
+
 ## 0.4.1 – 2026-11-25
 
 ### Neu

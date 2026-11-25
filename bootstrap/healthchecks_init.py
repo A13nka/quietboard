@@ -4,6 +4,7 @@
 # für die App ab. Healthchecks speichert API-Keys nur gehasht – sie lassen sich später nicht mehr auslesen.
 #
 # Zweiter Start: Ist die Ziel-Datei vorhanden und das Projekt hat einen Key, passiert nichts.
+# Übernahme (HC_API_KEY und HC_PING_KEY in .env): passiert ebenfalls nichts.
 # Fehlt die Datei (z. B. Volume der App gelöscht), werden neue Keys erzeugt.
 #
 # Quelle für den Inhalt in compose.yaml (configs: hc-bootstrap). Nach Änderungen:
@@ -20,6 +21,12 @@ from hc.api.models import Channel
 
 TARGET = "/bootstrap/healthchecks.json"
 OUT = "/tmp/hc.json"
+
+# Übernahme einer bestehenden Installation: Keys stehen in .env (HC_API_KEY, HC_PING_KEY) → nichts anfassen,
+# sonst würden API-Key und Admin-Passwort des vorhandenen Projekts neu gesetzt.
+if os.environ.get("HC_API_KEY") and os.environ.get("HC_PING_KEY"):
+    print("healthchecks-init: vorhandene Keys aus .env, keine Änderung (Übernahme)")
+    sys.exit(0)
 
 email = os.environ["ADMIN_EMAIL"].strip().lower()
 password = os.environ["ADMIN_PASSWORD"]

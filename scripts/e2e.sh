@@ -153,5 +153,13 @@ wait_until "Nach Neustart beide Motoren verbunden" 60 state_ok 'not d["errors"] 
 expect "Sitzung übersteht den Neustart" curl -fsS -o /dev/null -b "$JAR" "$S/api/state"
 expect "Notfall-CLI listet die Konten" sh -c "${C[*]} exec -T status python -m tools.cli users | grep -q viewer@example.org"
 
+echo "== Übernahme: Keys in .env, Key-Datei fehlt – healthchecks-init ändert nichts"
+key=$("${C[@]}" exec -T status python -c 'import json; print(json.load(open("/bootstrap/healthchecks.json"))["api_key"])')
+ping=$("${C[@]}" exec -T status python -c 'import json; print(json.load(open("/bootstrap/healthchecks.json"))["ping_key"])')
+"${C[@]}" run --rm --no-deps --entrypoint rm healthchecks-init -f /bootstrap/healthchecks.json >/dev/null 2>&1
+expect "healthchecks-init meldet Übernahme" sh -c "${C[*]} run --rm --no-deps -e HC_API_KEY=$key -e HC_PING_KEY=$ping healthchecks-init 2>&1 | grep -q 'keine Änderung'"
+expect "Alter API-Key bleibt gültig" curl -fsS -o /dev/null -H "X-Api-Key: $key" "http://127.0.0.1:$HC_PORT/api/v3/checks/"
+expect "Alias status-app erreichbar (für Tunnel/Webhooks der Vorgänger-App)" "${C[@]}" exec -T healthchecks python -c "import urllib.request; urllib.request.urlopen('http://status-app:8080/healthz', timeout=5)"
+
 docker stats --no-stream --format '{{.Name}}\t{{.MemUsage}}' | grep -E "quietboard-e2e" || true
 echo "E2E bestanden"
