@@ -23,23 +23,29 @@ curl -fsSL https://github.com/A13nka/quietboard/releases/latest/download/install
 
 Das Skript
 
-1. legt `~/quietboard` an und lädt `compose.yaml`,
+1. legt `~/quietboard` an (anderer Ort: `QB_DIR=/opt/quietboard` vor `bash`, der Ordner muss für deinen Benutzer beschreibbar sein) und lädt `compose.yaml`,
 2. erzeugt `.env` mit allen Secrets (Rechte 600) und erkennt die IP-Adresse des Servers,
 3. startet die Dienste – Healthchecks und Beszel richten sich dabei selbst ein,
-4. zeigt die Adressen, den **Einrichtungscode** und den Befehl zum Anbinden weiterer Hosts.
+4. zeigt die Adressen, den **Einrichtungscode** und den Befehl zum Anbinden der Hosts.
 
 ```text
-QuietBoard läuft.
-  App           http://192.0.2.10:8088   → Einrichtungscode: K7QM-3XPA (Admin-Konto anlegen)
+QuietBoard läuft – installiert in /home/du/quietboard
+  App           http://192.0.2.10:8088
   Healthchecks  http://192.0.2.10:8000
   Beszel        http://192.0.2.10:8090
-  Login für Healthchecks und Beszel: du@example.org, Passwort: grep ADMIN_PASSWORD ~/quietboard/.env
+  Login für Healthchecks und Beszel: du@example.org, Passwort: grep ADMIN_PASSWORD /home/du/quietboard/.env
 
-Host anbinden – auf jedem Host ausführen, auch auf diesem Server (als root oder Benutzer mit sudo):
-  curl -fsSL -H "Authorization: Bearer …" http://192.0.2.10:8088/api/install/host.sh | bash
+Nächste Schritte:
+  1. http://192.0.2.10:8088 öffnen und das Admin-Konto anlegen – Einrichtungscode: K7QM-3XPA
+  2. Diesen Server selbst als Host anbinden (als root oder Benutzer mit sudo):
+       curl -fsSL -H "Authorization: Bearer …" http://192.0.2.10:8088/api/install/host.sh | bash
+  3. Jeden weiteren Host mit demselben Befehl anbinden (steht auch in der App unter System → Host hinzufügen).
 ```
 
-Optionen per Umgebung vor `bash`: `QB_VERSION=v0.2.0` (bestimmte Version), `PUBLIC_HOST=status.example.org` (Adresse, unter der Hosts den Server erreichen), `TZ=Europe/Berlin`, `SITE_NAME=Homelab`, `QB_DIR=/opt/quietboard`, `QB_DATA_DIR=/srv/quietboard` (Daten in Ordnern statt Docker-Volumes, siehe [Daten in eigenen Ordnern](storage.md)).
+!!! tip "Der Server ist auch ein Host"
+    Der Installer richtet nur QuietBoard selbst ein. Damit der Server in der Host-Liste erscheint (CPU, RAM, Disk, Updates), auf ihm einmal den Host-Befehl aus Schritt 2 ausführen – genau wie auf jedem anderen Rechner.
+
+Optionen per Umgebung vor `bash`: `QB_VERSION=v0.2.1` (bestimmte Version), `PUBLIC_HOST=status.example.org` (Adresse, unter der Hosts den Server erreichen), `TZ=Europe/Berlin`, `SITE_NAME=Homelab`, `QB_DIR=/opt/quietboard`, `QB_DATA_DIR=/srv/quietboard` (Daten in Ordnern statt Docker-Volumes, siehe [Daten in eigenen Ordnern](storage.md)).
 
 ## Erste Schritte nach der Installation
 

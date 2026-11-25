@@ -30,7 +30,8 @@ docker compose version >/dev/null 2>&1 || die "Docker Compose (Plugin) fehlt"
 docker info >/dev/null 2>&1 || die "Kein Zugriff auf Docker – Benutzer in die Gruppe docker aufnehmen oder mit sudo ausführen"
 command -v openssl >/dev/null || die "openssl fehlt (apt-get install openssl)"
 
-mkdir -p "$QB_DIR/config"
+echo "QuietBoard: installiere nach $QB_DIR (andere Stelle: QB_DIR=/pfad vor bash)"
+mkdir -p "$QB_DIR/config" || die "Kann $QB_DIR nicht anlegen – Ordner mit Schreibrecht wählen, z. B. QB_DIR=\$HOME/quietboard"
 cd "$QB_DIR"
 fetch() { # <datei> [ziel]
   local target=${2:-$1}
@@ -88,17 +89,25 @@ for _ in $(seq 1 60); do
 done
 
 host=$(get BESZEL_PUBLIC_URL | sed -E 's#^https?://##; s#[:/].*##')
-code=$(docker compose logs status 2>/dev/null | grep -o 'Einrichtungscode: [A-Z0-9]\{4\}-[A-Z0-9]\{4\}' | tail -1 | cut -d' ' -f2 || true)
+# Einrichtungscode nur zeigen, solange noch kein Konto existiert (beim Update steht im Log noch der alte)
+step1="öffnen und anmelden"
+if curl -fsS -m 5 "http://127.0.0.1:$port/api/auth/state" 2>/dev/null | grep -q '"setup_needed":true'; then
+  code=$(docker compose logs status 2>/dev/null | grep -o 'Einrichtungscode: [A-Z0-9]\{4\}-[A-Z0-9]\{4\}' | tail -1 | cut -d' ' -f2 || true)
+  step1="öffnen und das Admin-Konto anlegen${code:+ – Einrichtungscode: $code}"
+fi
 cat <<EOF
 
-QuietBoard läuft.
-  App           http://$host:$port${code:+   → Einrichtungscode: $code (Admin-Konto anlegen)}
+QuietBoard läuft – installiert in $QB_DIR
+  App           http://$host:$port
   Healthchecks  $(get HC_PUBLIC_URL)
   Beszel        $(get BESZEL_PUBLIC_URL)
   Login für Healthchecks und Beszel: $(get ADMIN_EMAIL), Passwort: grep ADMIN_PASSWORD $QB_DIR/.env
 
-Host anbinden – auf jedem Host ausführen, auch auf diesem Server (als root oder Benutzer mit sudo):
-  curl -fsSL -H "Authorization: Bearer $(get INGEST_TOKEN)" http://$host:$port/api/install/host.sh | bash
+Nächste Schritte:
+  1. http://$host:$port $step1
+  2. Diesen Server selbst als Host anbinden (als root oder Benutzer mit sudo):
+       curl -fsSL -H "Authorization: Bearer $(get INGEST_TOKEN)" http://$host:$port/api/install/host.sh | bash
+  3. Jeden weiteren Host mit demselben Befehl anbinden (steht auch in der App unter System → Host hinzufügen).
 
 EOF
 [ "$hs" = 200 ] || echo "Hinweis: Host-Installer noch nicht bereit (HTTP $hs) – in einer Minute erneut versuchen."
