@@ -1,0 +1,20 @@
+[project]
+name = "quietboard"
+version = "0.0.0"
+description = "Homelab status: metrics, jobs and updates in one quiet view."
+license = "MIT"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E731"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

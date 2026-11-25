@@ -1,0 +1,11 @@
+[Unit]
+Description=Täglicher Update-Bericht
+
+[Timer]
+OnCalendar=*-*-* 06:00
+RandomizedDelaySec=15m
+# Holt verpasste Läufe nach (z. B. Hosts, die nur zeitweise laufen)
+Persistent=true
+
+[Install]
+WantedBy=timers.target

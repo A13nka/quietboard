@@ -1,0 +1,30 @@
+# Entwicklung auf dem eigenen Rechner:  make dev
+# Baut die App aus dem Quellcode, lädt Code bei Änderungen neu, zeigt Beispieldaten,
+# bindet nur an localhost und verzichtet auf Anmeldung.
+services:
+  status:
+    build: .
+    image: quietboard:dev
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload", "--reload-dir", "/srv/app"]
+    environment:
+      ALLOW_NO_AUTH: ${ALLOW_NO_AUTH:-1}   # 0 = mit Anmeldung testen
+      DEMO: ${DEMO:-true}
+      CHECKS_FILE: /config/checks.example.yaml
+      LOG_LEVEL: DEBUG
+    volumes:
+      - ./app:/srv/app:ro
+      - ./tools:/srv/tools:ro
+
+  # Simulierter Host: meldet regelmäßig Updates und Ereignisse an die App (make dev-fakehost).
+  fakehost:
+    profiles: [fakehost]
+    build: ./dev/fakehost
+    depends_on: [status]
+    environment:
+      STATUS_URL: http://status:8080
+      INGEST_TOKEN: ${INGEST_TOKEN}
+      FAKE_HOST: fakehost
+      INTERVAL: ${FAKEHOST_INTERVAL:-120}
+    volumes:
+      - ./hosts/updates-report:/usr/local/bin/updates-report:ro
+    mem_limit: 64m

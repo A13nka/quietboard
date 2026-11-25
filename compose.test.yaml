@@ -1,0 +1,15 @@
+# Zusatz für Tests (make e2e, Testumgebung): Mailpit fängt alle Mails ab, statt sie zu versenden.
+# Postfach: http://localhost:${MAILPIT_PORT:-18025} bzw. API /api/v1/messages
+services:
+  mailpit:
+    image: axllent/mailpit:v1.33.1
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${MAILPIT_PORT:-18025}:8025"
+    mem_limit: 64m
+  status:
+    environment:
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_TLS: "False"
+      SMTP_FROM: quietboard@example.org

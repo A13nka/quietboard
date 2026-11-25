@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# updates-report – meldet ausstehende apt-Updates (und optional ein neues Mailcow-Release) an die Status-App.
+# Installation: install -m 0755 updates-report /usr/local/bin/ ; Timer: updates-report.{service,timer}
+# Konfiguration: /etc/hc.conf (STATUS_INGEST_URL, STATUS_INGEST_TOKEN, STATUS_HOST, optional MAILCOW_DIR)
+set -uo pipefail
+# shellcheck disable=SC1091
+. /etc/hc.conf
+: "${STATUS_INGEST_URL:?STATUS_INGEST_URL fehlt in /etc/hc.conf}"
+: "${STATUS_INGEST_TOKEN:?STATUS_INGEST_TOKEN fehlt in /etc/hc.conf}"
+HOST=${STATUS_HOST:-$(hostname -s)}
+
+post() { # <json>
+  curl -fsS -m 20 --retry 3 --retry-delay 10 -o /dev/null \
+    -H "Authorization: Bearer $STATUS_INGEST_TOKEN" -H 'Content-Type: application/json' \
+    --data-binary "$1" "$STATUS_INGEST_URL"
+}
+
+# ---- apt
+apt-get update -qq -o DPkg::Lock::Timeout=180 >/dev/null 2>&1 || echo "apt-get update fehlgeschlagen" >&2
+items=""
+while IFS= read -r line; do
+  # Beispiel: Inst openssh-server [1:10.0p1-7] (1:10.0p1-7+deb13u2 Debian-Security:13/stable-security [amd64])
+  pkg=$(awk '{print $2}' <<<"$line")
+  old=$(sed -n 's/^Inst [^ ]* \[\([^]]*\)\].*/\1/p' <<<"$line")
+  new=$(sed -n 's/^Inst [^(]*(\([^ ]*\) .*/\1/p' <<<"$line")
+  sec=false; grep -qi 'security' <<<"$line" && sec=true
+  items+="${items:+,}{\"pkg\":\"$pkg\",\"from\":\"$old\",\"to\":\"$new\",\"security\":$sec}"
+done < <(apt-get -s -o Debug::NoLocking=1 dist-upgrade 2>/dev/null | grep '^Inst ')
+# ---- Neustart nötig? (reboot-required oder neuester installierter Kernel läuft noch nicht; LXC ohne /boot → nein)
+reboot=false
+[ -f /var/run/reboot-required ] && reboot=true
+newest=$(find /boot -maxdepth 1 -name 'vmlinuz-*' 2>/dev/null | sed 's|^/boot/vmlinuz-||' | sort -V | tail -1)
+[ -n "$newest" ] && [ "$newest" != "$(uname -r)" ] && reboot=true
+post "{\"host\":\"$HOST\",\"kind\":\"apt\",\"reboot\":$reboot,\"items\":[${items}]}" || echo "Meldung apt fehlgeschlagen" >&2
+
+# ---- Mailcow-Release (nur wenn MAILCOW_DIR gesetzt)
+# update.sh --check gibt aus, ob neuer Code verfügbar ist. Erkennung über die Ausgabe –
+# beim ersten Lauf die Ausgabe einmal von Hand prüfen und ggf. das Muster anpassen.
+if [ -n "${MAILCOW_DIR:-}" ] && [ -x "$MAILCOW_DIR/update.sh" ]; then
+  out=$(cd "$MAILCOW_DIR" && ./update.sh --check 2>&1) || true
+  if grep -qiE 'updated code is available|update available' <<<"$out" && ! grep -qi 'no updates available' <<<"$out"; then
+    mc="{\"pkg\":\"mailcow-dockerized\",\"from\":\"installiert\",\"to\":\"neues Release\",\"security\":false}"
+  else
+    mc=""
+  fi
+  post "{\"host\":\"$HOST\",\"kind\":\"mailcow\",\"items\":[${mc}]}" || echo "Meldung mailcow fehlgeschlagen" >&2
+fi

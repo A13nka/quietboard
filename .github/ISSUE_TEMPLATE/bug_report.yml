@@ -1,0 +1,27 @@
+name: Fehler melden / Bug report
+description: Etwas funktioniert nicht wie beschrieben / Something does not work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Was ist passiert? / What happened?
+      description: Schritte, Ergebnis, Erwartung / steps, result, expectation
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: System-Tab der App oder / or `docker compose images status`
+    validations: { required: true }
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "`docker compose logs --tail 100 status` – Tokens und Adressen entfernen / remove tokens and addresses"
+      render: text
+  - type: input
+    id: env
+    attributes:
+      label: Umgebung / Environment
+      placeholder: "Debian 13, Docker 29, 2 GB, LAN / VPS + WireGuard / Reverse Proxy"

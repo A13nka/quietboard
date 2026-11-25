@@ -1,0 +1,19 @@
+# Secrets und Laufzeitdaten – nie committen
+.env
+.env.*
+!.env.example
+.private-patterns
+data/
+*.tgz
+*.sqlite
+# rechnerabhängig
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+node_modules/
+site/
+.DS_Store
+CLAUDE.local.md
+dist/

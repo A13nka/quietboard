@@ -1,0 +1,50 @@
+site_name: QuietBoard
+site_description: Metriken, Jobs und Updates deines Homelabs in einer ruhigen Ansicht – richtet sich selbst ein.
+repo_url: https://github.com/A13nka/quietboard
+edit_uri: edit/main/docs/
+docs_dir: docs
+strict: true
+
+theme:
+  name: material
+  logo: assets/icon.svg
+  favicon: assets/icon.svg
+  language: de
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: { icon: material/brightness-7, name: Dunkel }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: { icon: material/brightness-4, name: Hell }
+  features: [navigation.sections, navigation.top, content.code.copy, search.suggest]
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc: { permalink: true }
+  - pymdownx.superfences
+  - pymdownx.highlight
+
+# Entscheidungen sind Entwickler-Notizen, nicht Teil der Website
+exclude_docs: |
+  decisions/
+
+nav:
+  - Start: index.md
+  - Installation:
+      - install/index.md
+      - Netzwerk und HTTPS: install/network.md
+      - Aktualisieren und Versionen: install/update.md
+      - Sicherung, Umzug, Deinstallation: install/backup.md
+  - Hosts:
+      - hosts/index.md
+      - Proxmox VE und PBS: hosts/proxmox.md
+      - Synology: hosts/synology.md
+  - Jobs und Checks: jobs.md
+  - Benachrichtigungen: notifications.md
+  - Konten und Anmeldung: accounts.md
+  - Referenz:
+      - ".env": reference/env.md
+      - API: reference/api.md
+  - FAQ: faq.md

@@ -1,0 +1,20 @@
+# Beszel-Agent für Docker-Hosts.
+# Werte aus Beszel → "System hinzufügen" → Docker-Variante übernehmen und in .env neben dieser Datei ablegen:
+#   KEY=<Public Key aus dem Hub>
+#   TOKEN=<Token aus "System hinzufügen">
+#   HUB_URL=http://<server>:8090
+# Später erzeugt QuietBoard diesen Block fertig ausgefüllt ("Host hinzufügen").
+name: beszel-agent
+services:
+  beszel-agent:
+    image: henrygd/beszel-agent:0.21.2
+    container_name: beszel-agent
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      KEY: ${KEY}
+      TOKEN: ${TOKEN}
+      HUB_URL: ${HUB_URL}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    mem_limit: 64m

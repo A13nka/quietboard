@@ -1,0 +1,57 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0          # gitleaks prüft die ganze Historie
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: pre-commit (gitleaks, ruff)
+        run: pre-commit run --all-files --show-diff-on-failure
+      - name: Tests
+        run: pytest -q
+      - name: shellcheck (gleiche Version wie make lint)
+        run: |
+          shopt -s nullglob
+          docker run --rm -e LANG=C.UTF-8 -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0 install.sh hosts/*.sh hosts/hc hosts/updates-report generate-env.sh dev/fakehost/run.sh scripts/*.sh deploy/*/*.sh
+      - name: Lizenzen (keine unerwartete Copyleft-Lizenz im Image)
+        run: |
+          python -m venv /tmp/img && /tmp/img/bin/pip install -q -r requirements.txt pip-licenses
+          # Ausnahmen begründet in docs/decisions/0004-lizenz-certifi-mpl.md
+          /tmp/img/bin/pip-licenses --partial-match --fail-on "GPL;AGPL;LGPL;MPL;EUPL;SSPL;BUSL" \
+            --ignore-packages pip-licenses prettytable wcwidth certifi
+
+  e2e:
+    runs-on: ubuntu-24.04
+    needs: lint-test
+    steps:
+      - uses: actions/checkout@v5
+      - name: Frische Installation hochfahren und prüfen
+        run: scripts/e2e.sh
+
+  docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+      - run: pip install -r requirements-docs.txt
+      - name: Doku bauen (strict – bricht bei kaputten Links ab)
+        run: NO_MKDOCS_2_WARNING=1 mkdocs build --strict

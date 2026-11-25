@@ -1,0 +1,31 @@
+name: Docs
+# Veröffentlicht die Doku auf GitHub Pages – erst, wenn das Repository öffentlich ist (Pages für private Repos kostet).
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**", "mkdocs.yml", "requirements-docs.txt"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements-docs.txt && NO_MKDOCS_2_WARNING=1 mkdocs build --strict -d site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: pages
+        uses: actions/deploy-pages@v4

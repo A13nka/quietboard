@@ -1,0 +1,16 @@
+# /etc/hc.conf  (chmod 600, root)
+# <server> = Adresse, unter der dieser Host den quietboard-Server erreicht (LAN, VPN oder öffentlich).
+
+# Ping-Helfer hc → Healthchecks
+# Ping-Key: Healthchecks → Projekt → Einstellungen → "Ping key"
+HC_PING_BASE=http://<server>:8000/ping
+HC_PING_KEY=
+
+# updates-report → QuietBoard
+STATUS_INGEST_URL=http://<server>:8088/api/ingest/updates
+STATUS_INGEST_TOKEN=
+# Hostname wie in checks.yaml; leer = hostname -s
+STATUS_HOST=
+
+# Optional, nur auf Mailcow-Hosts: Release-Prüfung über update.sh --check
+#MAILCOW_DIR=/opt/mailcow-dockerized

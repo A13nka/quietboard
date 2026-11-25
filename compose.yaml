@@ -1,0 +1,254 @@
+# QuietBoard – eine Compose, eine .env, ein Befehl:  docker compose up -d
+# Optionale Profile:  --profile signal   (Signal-Versand)   --profile tunnel   (Cloudflare Tunnel)
+#
+# Nach außen nötig: status (8088), Ping-Pfad von Healthchecks (8000), Beszel-Hub für Agents (8090).
+# BIND_ADDR in .env schränkt die Bindung ein (z. B. VPN-Adresse).
+#
+# Ersteinrichtung ohne GUI:
+#   healthchecks-init  legt Admin, Projekt und Keys an und übergibt sie der App (Volume bootstrap)
+#   beszel-init        legt den Beszel-Superuser an; Benutzer und Agent-Token richtet danach die App ein
+# Beides ist idempotent: Ein zweiter Start ändert nichts.
+name: quietboard
+
+x-admin: &admin
+  ADMIN_EMAIL: ${ADMIN_EMAIL:?ADMIN_EMAIL fehlt in .env}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD fehlt in .env (./generate-env.sh)}
+
+x-healthchecks-env: &hc-env
+  DB: sqlite
+  DB_NAME: /data/hc.sqlite
+  GUNICORN_WORKERS: "2"
+  SECRET_KEY: ${HC_SECRET_KEY:?HC_SECRET_KEY fehlt in .env (./generate-env.sh)}
+  SITE_ROOT: ${HC_PUBLIC_URL:-http://localhost:8000}
+  SITE_NAME: ${SITE_NAME:-Homelab}
+  PING_ENDPOINT: ${HC_PING_ENDPOINT:-http://localhost:8000/ping/}
+  SECURE_PROXY_SSL_HEADER: HTTP_X_FORWARDED_PROTO,https
+  REGISTRATION_OPEN: "False"
+  DEBUG: "False"
+  EMAIL_HOST: ${SMTP_HOST:-}
+  EMAIL_PORT: ${SMTP_PORT:-587}
+  EMAIL_USE_TLS: ${SMTP_TLS:-True}
+  EMAIL_HOST_USER: ${SMTP_USER:-}
+  EMAIL_HOST_PASSWORD: ${SMTP_PASSWORD:-}
+  DEFAULT_FROM_EMAIL: ${SMTP_FROM:-}
+  INTEGRATIONS_ALLOW_PRIVATE_IPS: "True"
+  EXTRA_ALLOWED_HOSTS: ${HC_EXTRA_HOSTS:-}   # weitere Namen, unter denen Healthchecks erreichbar ist
+  TZ: ${TZ:-UTC}
+
+services:
+  status:
+    # Version: QB_VERSION in .env (z. B. v0.1.0, v0.1, v0, latest, edge); STATUS_IMAGE ersetzt das ganze Image
+    image: ${STATUS_IMAGE:-ghcr.io/a13nka/quietboard:${QB_VERSION:-latest}}
+    restart: unless-stopped
+    depends_on:
+      healthchecks-init: { condition: service_completed_successfully }
+      beszel-init: { condition: service_completed_successfully }
+      healthchecks: { condition: service_started }
+      beszel: { condition: service_started }
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:${STATUS_PORT:-8088}:8080"
+    environment:
+      <<: *admin
+      TZ: ${TZ:-UTC}
+      SITE_NAME: ${SITE_NAME:-Homelab}
+      CHECKS_FILE: ${CHECKS_FILE:-/config/checks.yaml}
+      POLL_SECONDS: ${POLL_SECONDS:-60}
+      BESZEL_ALERT_DOWN_MIN: ${BESZEL_ALERT_DOWN_MIN:-5}
+      HC_URL: http://healthchecks:8000
+      HC_PUBLIC_URL: ${HC_PUBLIC_URL:-}
+      HC_PING_ENDPOINT: ${HC_PING_ENDPOINT:-http://localhost:8000/ping/}
+      BESZEL_URL: http://beszel:8090
+      BESZEL_PUBLIC_URL: ${BESZEL_PUBLIC_URL:-}
+      # Nur für Bestandsinstallationen; sonst richtet die App die Zugänge selbst ein.
+      HC_API_KEY: ${HC_API_KEY:-}
+      HC_PING_KEY: ${HC_PING_KEY:-}
+      BESZEL_USER: ${BESZEL_APP_USER:-}
+      BESZEL_PASS: ${BESZEL_APP_PASS:-}
+      PBS_TARGETS: ${PBS_TARGETS:-}
+      SIGNAL_URL: http://signal-api:8080
+      SIGNAL_NUMBER: ${SIGNAL_NUMBER:-}
+      SIGNAL_RECIPIENT: ${SIGNAL_RECIPIENT:-}
+      INGEST_TOKEN: ${INGEST_TOKEN:?INGEST_TOKEN fehlt in .env (./generate-env.sh)}
+      ACCESS_TEAM: ${ACCESS_TEAM:-}
+      ACCESS_AUD: ${ACCESS_AUD:-}
+      ALLOW_NO_AUTH: ${ALLOW_NO_AUTH:-0}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.org}
+      DEMO: ${DEMO:-false}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_TLS: ${SMTP_TLS:-True}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    volumes:
+      - ./config:/config:ro
+      - status-data:/data
+      - bootstrap:/bootstrap:ro
+    mem_limit: 128m
+
+  healthchecks-init:
+    image: healthchecks/healthchecks:v5.0.3
+    user: "0"   # nur um die Key-Datei für die App (UID 10001) abzulegen; Django läuft als hc
+    restart: "no"
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        cd /opt/healthchecks &&
+        runuser -u hc -- ./manage.py migrate --no-input -v 0 &&
+        runuser -u hc -- ./manage.py shell -v 0 < /hc_bootstrap.py &&
+        if [ -s /tmp/hc.json ]; then install -m 600 -o 10001 -g 10001 /tmp/hc.json /bootstrap/healthchecks.json; fi
+    environment:
+      <<: [*hc-env, *admin]
+    configs:
+      - { source: hc-bootstrap, target: /hc_bootstrap.py }
+      - { source: hc-local-settings, target: /opt/healthchecks/hc/local_settings.py }
+    volumes:
+      - healthchecks-data:/data
+      - bootstrap:/bootstrap
+    mem_limit: 256m
+
+  healthchecks:
+    image: healthchecks/healthchecks:v5.0.3
+    restart: unless-stopped
+    depends_on:
+      healthchecks-init: { condition: service_completed_successfully }
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:${HC_PORT:-8000}:8000"
+    environment: *hc-env
+    configs:
+      - { source: hc-local-settings, target: /opt/healthchecks/hc/local_settings.py }
+    volumes:
+      - healthchecks-data:/data
+    mem_limit: 384m
+
+  beszel-init:
+    image: henrygd/beszel:0.21.2
+    restart: "no"
+    command: ["superuser", "upsert", "${ADMIN_EMAIL}", "${ADMIN_PASSWORD}", "--dir", "/beszel_data"]
+    volumes:
+      - beszel-data:/beszel_data
+    mem_limit: 128m
+
+  beszel:
+    image: henrygd/beszel:0.21.2
+    restart: unless-stopped
+    depends_on:
+      beszel-init: { condition: service_completed_successfully }
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:${BESZEL_PORT:-8090}:8090"
+    environment:
+      APP_URL: ${BESZEL_PUBLIC_URL:-http://localhost:8090}
+      SHARE_ALL_SYSTEMS: "true"
+    volumes:
+      - beszel-data:/beszel_data
+    mem_limit: 128m
+
+  signal-api:
+    profiles: [signal]
+    image: bbernhard/signal-cli-rest-api:0.101
+    restart: unless-stopped
+    environment:
+      MODE: json-rpc
+      TZ: ${TZ:-UTC}
+    volumes:
+      - signal-data:/home/.local/share/signal-cli
+    mem_limit: 512m
+
+  cloudflared:
+    profiles: [tunnel]
+    image: cloudflare/cloudflared:2026.11.1
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    mem_limit: 64m
+
+volumes:
+  status-data:
+  healthchecks-data:
+  beszel-data:
+  bootstrap:
+  signal-data:
+
+# --- Ab hier generiert von scripts/sync_compose_configs.py – nicht von Hand ändern.
+configs:
+  hc-bootstrap:
+    content: |
+      # Healthchecks-Ersteinrichtung ohne GUI. Läuft im Healthchecks-Image per `manage.py shell` (Django-Kontext).
+      # Legt Admin, Projekt, API-/Ping-Keys und die Integration "E-Mail" an und schreibt die Klartext-Keys
+      # nach /tmp/hc.json. Der Aufrufer (healthchecks-init in compose.yaml) legt die Datei mit Rechten 600
+      # für die App ab. Healthchecks speichert API-Keys nur gehasht – sie lassen sich später nicht mehr auslesen.
+      #
+      # Zweiter Start: Ist die Ziel-Datei vorhanden und das Projekt hat einen Key, passiert nichts.
+      # Fehlt die Datei (z. B. Volume der App gelöscht), werden neue Keys erzeugt.
+      #
+      # Quelle für den Inhalt in compose.yaml (configs: hc-bootstrap). Nach Änderungen:
+      #   python3 scripts/sync_compose_configs.py
+      # Kein Dollarzeichen verwenden: Compose würde es als Variable lesen.
+      import json
+      import os
+      import sys
+      import uuid
+
+      from django.contrib.auth.models import User
+      from hc.accounts.models import Profile, Project
+      from hc.api.models import Channel
+
+      TARGET = "/bootstrap/healthchecks.json"
+      OUT = "/tmp/hc.json"
+
+      email = os.environ["ADMIN_EMAIL"].strip().lower()
+      password = os.environ["ADMIN_PASSWORD"]
+      site_name = os.environ.get("SITE_NAME") or "Homelab"
+
+      user = User.objects.filter(email=email).first()
+      project = Project.objects.filter(owner=user).order_by("id").first() if user else None
+
+      if os.path.exists(TARGET) and project is not None and project.api_key:
+          print("healthchecks-init: bereits eingerichtet, keine Änderung")
+          sys.exit(0)
+
+      if user is None:
+          user = User(username=str(uuid.uuid4())[:30], email=email)
+      user.is_staff = True
+      user.is_superuser = True
+      user.set_password(password)
+      user.save()
+      Profile.objects.for_user(user)
+
+      if project is None:
+          project = Project(owner=user, name=site_name, badge_key=user.username)
+      project.show_slugs = True
+      api_key = project.set_api_key()
+      api_key_readonly = project.set_api_key_readonly()
+      ping_key = project.ping_key or project.set_ping_key()
+      project.save()
+
+      if not Channel.objects.filter(project=project, kind="email").exists():
+          Channel.objects.create(project=project, kind="email", name="E-Mail", value=email, email_verified=True)
+
+      with open(OUT, "w", encoding="utf-8") as fh:
+          json.dump(
+              {
+                  "project": str(project.code),
+                  "api_key": api_key,
+                  "api_key_readonly": api_key_readonly,
+                  "ping_key": ping_key,
+                  "admin_email": email,
+              },
+              fh,
+          )
+      print(f"healthchecks-init: Projekt '{project.name}' eingerichtet, Keys übergeben")
+  hc-local-settings:
+    content: |
+      # Zusätzliche Healthchecks-Einstellungen (wird als hc/local_settings.py eingebunden).
+      # ALLOWED_HOSTS aus den öffentlichen Adressen ableiten, plus der interne Name für die App.
+      # Quelle für den Inhalt in compose.yaml (configs: hc-local-settings). Kein Dollarzeichen verwenden.
+      import os
+      from urllib.parse import urlparse
+
+      _hosts = {urlparse(os.getenv(name, "")).hostname for name in ("SITE_ROOT", "PING_ENDPOINT")}
+      _hosts |= {"healthchecks", "localhost", "127.0.0.1"}
+      _hosts |= {h.strip() for h in os.getenv("EXTRA_ALLOWED_HOSTS", "").split(",")}
+      ALLOWED_HOSTS = sorted(h for h in _hosts if h)

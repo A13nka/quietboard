@@ -1,0 +1,60 @@
+# checks.yaml – Checks-as-Code: Healthchecks-Checks, Prioritäten und Host-Zuordnung.
+# Abgleich nach Healthchecks:  docker compose run --rm status python -m tools.hc_sync [--dry]
+# Gelesen von QuietBoard (Mapping PVE/PBS-Events → Check, Hosts mit Zeitfenster, Weblinks).
+# Die Namen passen zu den Beispieldaten (DEMO=true).
+#
+# grace: Karenzzeit (= Höchstdauer eines Laufs, bevor alarmiert wird). Einheiten: m, h, d
+
+settings:
+  tz: Europe/Berlin
+  # Healthchecks-Integrationen pro Priorität (Namen wie in Healthchecks angelegt)
+  channels:
+    kritisch: [E-Mail]
+    normal: [E-Mail]
+    info: []
+  digest_time: "07:00"
+
+# Hosts: Beszel-Name, ob 24/7 erwartet, Weblinks
+hosts:
+  proxmox:  { beszel: proxmox,  always_on: true, url: { PVE: "https://proxmox.home.arpa:8006" } }
+  docker01: { beszel: docker01, always_on: true }
+  nas:      { beszel: nas,      always_on: false, url: { NAS: "https://nas.home.arpa" } }   # nur nachts an
+  vps:      { beszel: vps,      always_on: true, url: "https://vps.example.org" }
+
+checks:
+  - name: proxmox/vzdump
+    tags: { host: proxmox, typ: backup, prio: kritisch }
+    schedule: "45 1 * * *"
+    grace: 2h
+    match: { source: pve, host: proxmox, type: vzdump }
+
+  - name: proxmox/pbs-verify
+    tags: { host: proxmox, typ: verify, prio: normal }
+    schedule: "0 0 * * 0"
+    grace: 3h
+    match: { source: pbs, host: pbs, type: verify }
+
+  - name: docker01/restic-offsite
+    desc: "hc run docker01-restic-offsite -- restic backup ..."
+    tags: { host: docker01, typ: backup, prio: kritisch }
+    schedule: "0 3 * * *"
+    grace: 2h
+
+  - name: docker01/certbot
+    tags: { host: docker01, typ: zertifikat, prio: normal }
+    period: 1d
+    grace: 6h
+
+  - name: vps/db-dump
+    tags: { host: vps, typ: backup, prio: kritisch }
+    schedule: "30 2 * * *"
+    grace: 1h
+
+  - name: nas/online
+    desc: "Meldet sich beim Hochfahren im Nachtfenster"
+    tags: { host: nas, typ: fenster, prio: info }
+    schedule: "0 2 * * *"
+    grace: 3h
+
+# Docker-Hub-Images auf neuere Tags gleichen Schemas prüfen (einmal täglich)
+watch_images: []

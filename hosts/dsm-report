@@ -1,0 +1,22 @@
+#!/bin/sh
+# dsm-report – meldet verfügbare Paket-Updates einer Synology (DSM 7) an QuietBoard.
+# Konfiguration: /usr/local/etc/quietboard.conf (STATUS_INGEST_URL, STATUS_INGEST_TOKEN, STATUS_HOST)
+# Aufruf über den DSM-Aufgabenplaner (täglich, root). Ausgabeformat von synopkg je nach DSM-Version – bei
+# Abweichungen einmal von Hand prüfen: /usr/syno/bin/synopkg checkupdateall
+CONF=${QB_CONF:-/usr/local/etc/quietboard.conf}
+# shellcheck disable=SC1090
+. "$CONF" || { echo "Konfiguration $CONF fehlt" >&2; exit 1; }
+: "${STATUS_INGEST_URL:?STATUS_INGEST_URL fehlt}" "${STATUS_INGEST_TOKEN:?STATUS_INGEST_TOKEN fehlt}"
+HOST=${STATUS_HOST:-$(hostname -s)}
+
+items=""
+# synopkg checkupdateall: JSON-Liste aktualisierbarer Pakete (Felder "id"/"name", "version")
+for p in $(/usr/syno/bin/synopkg checkupdateall 2>/dev/null | grep -o '"id":"[^"]*"' | cut -d'"' -f4); do
+  items="${items:+$items,}{\"pkg\":\"$p\",\"from\":\"\",\"to\":\"Update\",\"security\":false}"
+done
+# DSM selbst (falls vorhanden): synoupgrade meldet ein verfügbares Update
+if [ -x /usr/syno/sbin/synoupgrade ] && /usr/syno/sbin/synoupgrade --check 2>/dev/null | grep -qi 'available'; then
+  items="${items:+$items,}{\"pkg\":\"DSM\",\"from\":\"\",\"to\":\"Update verfügbar\",\"security\":true}"
+fi
+curl -fsS -m 20 --retry 3 -o /dev/null -H "Authorization: Bearer $STATUS_INGEST_TOKEN" -H 'Content-Type: application/json' \
+  --data-binary "{\"host\":\"$HOST\",\"kind\":\"dsm\",\"items\":[${items}]}" "$STATUS_INGEST_URL"

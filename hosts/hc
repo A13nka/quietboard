@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# hc – Healthchecks-Helfer für Skripte und Timer.
+# Installation: install -m 0755 hc /usr/local/bin/hc ; Konfiguration in /etc/hc.conf (siehe hc.conf.example)
+#
+#   hc run  <slug> -- <befehl ...>        meldet Start, führt aus, meldet Exitcode + Log (letzte 20 KB), reicht Exitcode durch
+#   hc ping <slug> [start|fail|log|<rc>] [-]  einzelner Ping; mit "-" wird stdin als Text mitgeschickt
+#                                         (nur auf ausdrücklichen Wunsch – sonst hinge hc bei offener Eingabe, z. B. über ssh)
+#
+# Beispiel systemd:  ExecStart=/usr/local/bin/hc run docker01-backup -- /usr/local/bin/backup.sh
+set -uo pipefail
+
+CONF=${HC_CONF:-/etc/hc.conf}
+[ -r "$CONF" ] || [ ! -r /usr/local/etc/quietboard.conf ] || CONF=/usr/local/etc/quietboard.conf   # Synology
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+: "${HC_PING_BASE:?HC_PING_BASE fehlt in $CONF}"
+: "${HC_PING_KEY:?HC_PING_KEY fehlt in $CONF}"
+
+send() { # <slug> <suffix> [bodyfile]
+  local url="$HC_PING_BASE/$HC_PING_KEY/$1${2:+/$2}"
+  local args=(-fsS -m 15 --retry 3 --retry-delay 5 -o /dev/null)
+  if [ -n "${3:-}" ]; then args+=(--data-binary "@$3"); else args+=(-X POST); fi
+  curl "${args[@]}" "$url" || echo "hc: Ping fehlgeschlagen: ${url/$HC_PING_KEY/***}" >&2
+}
+
+case "${1:-}" in
+  run)
+    slug=${2:?Slug fehlt}; shift 2
+    [ "${1:-}" = "--" ] && shift
+    [ $# -gt 0 ] || { echo "hc run: Befehl fehlt" >&2; exit 2; }
+    rid=$(cat /proc/sys/kernel/random/uuid)
+    out=$(mktemp); trap 'rm -f "$out" "$out.t"' EXIT
+    send "$slug" "start?rid=$rid"
+    "$@" 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
+    tail -c 20000 "$out" > "$out.t"
+    send "$slug" "$rc?rid=$rid" "$out.t"
+    exit "$rc"
+    ;;
+  ping)
+    slug=${2:?Slug fehlt}; kind=${3:-}
+    [ "$kind" = - ] && { kind=""; set -- "$1" "$2" "" -; }
+    if [ "${4:-}" = - ]; then
+      tmp=$(mktemp); head -c 100000 > "$tmp"; send "$slug" "$kind" "$tmp"; rm -f "$tmp"
+    else
+      send "$slug" "$kind"
+    fi
+    ;;
+  *)
+    sed -n '2,9p' "$0"; exit 2 ;;
+esac

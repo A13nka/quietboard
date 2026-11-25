@@ -1,0 +1,9 @@
+[Unit]
+Description=Ausstehende Updates an die Status-App melden
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/updates-report
+Nice=10

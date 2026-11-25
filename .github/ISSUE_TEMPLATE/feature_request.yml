@@ -1,0 +1,13 @@
+name: Idee / Feature request
+description: Neue Funktion, Rezept oder Host-Typ / New feature, recipe or host type
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Welches Problem löst es? / What problem does it solve?
+    validations: { required: true }
+  - type: textarea
+    id: idea
+    attributes:
+      label: Vorschlag / Proposal
