@@ -58,12 +58,13 @@ volumes:
   beszel-agent-data:
 ```
 
-So funktioniert es auch auf UGREEN (UGOS), QNAP (Container Station), TrueNAS SCALE, Unraid und OMV. Updates dieser Systeme meldet QuietBoard dann noch nicht – Anleitungen je Hersteller folgen.
+So funktioniert es auch auf UGREEN (UGOS), QNAP (Container Station), TrueNAS SCALE, Unraid und OMV. Update-Berichte und Jobs je Hersteller: [Weitere NAS](nas.md).
 
 ## Weitere Typen
 
 - [Proxmox VE und Backup Server](proxmox.md) – Backups, Sync, Verify, GC und Prune als Jobs
 - [Synology](synology.md) – Agent als Binary oder Container, DSM-Updates, NAS mit Zeitfenster
+- [Weitere NAS](nas.md) – UGREEN, QNAP, TrueNAS, Unraid, OMV
 
 ## Einstellungen je Host
 

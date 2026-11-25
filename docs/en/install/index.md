@@ -29,20 +29,20 @@ The script
 4. prints the addresses, the **setup code** and the command for adding hosts.
 
 ```text
-QuietBoard läuft – installiert in /home/you/quietboard
+QuietBoard is running – installed in /home/you/quietboard
   App           http://192.0.2.10:8088
   Healthchecks  http://192.0.2.10:8000
   Beszel        http://192.0.2.10:8090
-  Login für Healthchecks und Beszel: you@example.org, Passwort: grep ADMIN_PASSWORD /home/you/quietboard/.env
+  Login for Healthchecks and Beszel: you@example.org, password: grep ADMIN_PASSWORD /home/you/quietboard/.env
 
-Nächste Schritte:
-  1. http://192.0.2.10:8088 öffnen und das Admin-Konto anlegen – Einrichtungscode: K7QM-3XPA
-  2. Diesen Server selbst als Host anbinden (als root oder Benutzer mit sudo):
+Next steps:
+  1. Open http://192.0.2.10:8088 and create the admin account – setup code: K7QM-3XPA
+  2. Connect this server itself as a host (as root or a user with sudo):
        curl -fsSL -H "Authorization: Bearer …" http://192.0.2.10:8088/api/install/host.sh | bash
-  3. Jeden weiteren Host mit demselben Befehl anbinden (steht auch in der App unter System → Host hinzufügen).
+  3. Connect every other host with the same command (also in the app under System → Add host).
 ```
 
-(The installer output is German for now: “next steps” – 1. open the app and create the admin account with the setup code, 2. connect this server itself as a host, 3. connect every other host with the same command.)
+The installer speaks German on servers with a German locale and English otherwise; `LANGUAGE=en` or `LANGUAGE=de` before `bash` forces a language.
 
 !!! tip "The server is a host, too"
     The installer only sets up QuietBoard itself. To see the server in the host list (CPU, RAM, disk, updates), run the host command from step 2 on it once – exactly like on any other machine.
