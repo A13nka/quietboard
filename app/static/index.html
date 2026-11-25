@@ -28,8 +28,9 @@ main{padding:0 14px calc(env(safe-area-inset-bottom) + 84px);max-width:640px;mar
 .hd{display:flex;align-items:center;gap:10px;padding:11px 12px;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .d{width:9px;height:9px;border-radius:50%;flex:none;background:var(--tx3)}
 .d.ok{background:var(--ok)}.d.bad{background:var(--bad)}.d.warn{background:var(--warn)}.d.run{background:var(--acc)}
-.n{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.m{color:var(--tx2);font-size:13px;white-space:nowrap}
+.n{flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tg{flex:0 1000000 auto;min-width:0;display:flex;overflow:hidden;white-space:nowrap;margin-left:-4px}
+.m{flex:0 1000 auto;min-width:min-content;margin-left:auto;color:var(--tx2);font-size:13px;text-align:right;line-height:1.35}
 .cv{color:var(--tx3);transition:transform .15s;font-size:12px}.op .cv{transform:rotate(180deg)}
 .bd{display:none;padding:0 12px 12px 31px}.op .bd{display:block}
 .log{background:var(--chip);border-radius:8px;padding:8px 10px;font:12px/1.5 var(--mono);color:var(--tx2);white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto}
@@ -70,7 +71,7 @@ function rel(iso){if(!iso)return'nie';const s=(Date.now()-new Date(iso))/1000;if
 function dur(sec){if(sec==null)return'';sec=Math.round(sec);return sec<60?sec+' s':sec<3600?Math.round(sec/60)+' min':(sec/3600).toFixed(1)+' h'}
 const CS={up:'ok',new:'',paused:'',grace:'warn',down:'bad',started:'run'};
 function chkMeta(c){if(c.status==='started')return c.last_ping?'läuft seit '+rel(c.last_ping):'läuft';if(c.status==='down')return'fehlt/fehler';if(c.status==='grace')return'überfällig';if(c.status==='new')return'neu';if(c.status==='paused')return'pausiert';return rel(c.last_ping)+(c.last_duration?' · '+dur(c.last_duration):'')}
-function item(id,dot,name,meta,body){return`<div class="it${open.has(id)?' op':''}" data-id="${esc(id)}"><div class="hd"><span class="d ${dot}"></span><span class="n">${name}</span><span class="m">${meta}</span><span class="cv">▾</span></div><div class="bd">${body}</div></div>`}
+function item(id,dot,name,meta,body){const ti=name.indexOf('<span class="tag">'),nm=ti<0?name:name.slice(0,ti),tg=ti<0?'':name.slice(ti);return`<div class="it${open.has(id)?' op':''}" data-id="${esc(id)}"><div class="hd"><span class="d ${dot}"></span><span class="n">${nm}</span>${tg?`<span class="tg">${tg}</span>`:''}<span class="m">${meta}</span><span class="cv">▾</span></div><div class="bd">${body}</div></div>`}
 function chkAdmin(c){if(!isAdmin()||!c.uuid)return'';return`<div class="kv" style="margin-top:8px;align-items:center"><span>Priorität <select class="sm" data-prio="${esc(c.uuid)}">${['kritisch','normal','info'].map(p=>`<option${p===c.prio?' selected':''}>${p}</option>`).join('')}</select></span><span>${c.status==='paused'?`<button class="bt" data-ck="resume:${esc(c.uuid)}">Fortsetzen</button>`:`<button class="bt" data-ck="pause:${esc(c.uuid)}">Pausieren</button>`}<button class="bt" data-job="edit:${esc(c.uuid)}">Bearbeiten</button><button class="bt" data-job="del:${esc(c.uuid)}">Löschen</button></span></div>`}
 function chkItem(c,label){return item('c:'+c.uuid,CS[c.status]||'',esc(label??c.name)+(c.prio&&c.prio!=='normal'?`<span class="tag">${esc(c.prio)}</span>`:''),esc(chkMeta(c)),`<div class="log" data-log="${esc(c.uuid)}">Lade Log …</div>${chkAdmin(c)}${chkGuide(c)}<a class="lk" href="${esc(S.links.hc)}" target="_blank" rel="noopener">Verlauf in Healthchecks ↗</a>`)}
 // ---- Jobs in der Oberfläche anlegen, bearbeiten, löschen; Anleitungen je Meldeweg
