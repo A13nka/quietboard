@@ -6,6 +6,12 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Neu
+- **Englische Dokumentation** unter `/en/` mit Sprachumschalter; das englische README verlinkt dorthin.
+
+### Geändert
+- Doku: Zeitfenster-NAS über die Oberfläche statt `checks.yaml`, FAQ zu Chrome/macOS („Lokales Netzwerk“) und zum Server als eigenem Host, aktuelle Speicherangaben.
+
 ## 0.4.0 – 2026-11-25
 
 ### Neu

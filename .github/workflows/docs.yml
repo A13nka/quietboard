@@ -3,7 +3,7 @@ name: Docs
 on:
   push:
     branches: [main]
-    paths: ["docs/**", "mkdocs.yml", "requirements-docs.txt"]
+    paths: ["docs/**", "mkdocs.yml", "mkdocs.en.yml", "requirements-docs.txt"]
   workflow_dispatch:
 
 permissions:
@@ -23,7 +23,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - run: pip install -r requirements-docs.txt && NO_MKDOCS_2_WARNING=1 mkdocs build --strict -d site
+      - run: pip install -r requirements-docs.txt
+      - name: Deutsch unter /, Englisch unter /en/
+        run: |
+          NO_MKDOCS_2_WARNING=1 mkdocs build --strict -d site
+          NO_MKDOCS_2_WARNING=1 mkdocs build --strict -f mkdocs.en.yml -d site/en
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

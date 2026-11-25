@@ -30,6 +30,12 @@ markdown_extensions:
 # Entscheidungen sind Entwickler-Notizen, nicht Teil der Website
 exclude_docs: |
   decisions/
+  en/
+
+extra:
+  alternate:
+    - { name: Deutsch, link: /quietboard/, lang: de }
+    - { name: English, link: /quietboard/en/, lang: en }
 
 nav:
   - Start: index.md

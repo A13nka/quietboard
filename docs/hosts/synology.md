@@ -55,19 +55,20 @@ Der alte Eintrag des Systems im bisherigen Hub kann danach gelöscht werden.
 
 Eine NAS, die nur nachts läuft, soll tagsüber keinen Alarm auslösen:
 
-- In `config/checks.yaml` unter `hosts` mit `always_on: false` eintragen – die App zeigt sie dann als „aus (geplant)“ statt rot, und die Morgenmeldung nennt, wann sie zuletzt da war.
-- Einen Check `<name>/online` mit dem Einschaltzeitpunkt anlegen; fehlt der Ping, war die NAS im Fenster nicht da – das ist ein echter Alarm.
+- In der App unter *Hosts* die NAS aufklappen → *Einstellungen* → **Läuft dauerhaft** ausschalten. Die App zeigt sie dann als „aus (geplant)“ statt rot, und die Morgenmeldung nennt, wann sie zuletzt da war.
+- Unter *Jobs* einen Job `<name>/online` anlegen (Vorlage „Skript oder Cronjob“, Zeitplan = Einschaltzeitpunkt, z. B. `0 2 * * *`, darf dauern `2h`). Fehlt der Ping, war die NAS im Fenster nicht da – das ist ein echter Alarm.
 - In Beszel beim System den Status-Alarm ausschalten (sonst meldet Beszel jeden Morgen „down“).
 
-```yaml
-hosts:
-  nas: { beszel: nas, always_on: false, url: { DSM: "https://nas.home.arpa:5001" } }
-checks:
-  - name: nas/online
-    tags: { host: nas, typ: fenster, prio: normal }
-    schedule: "0 2 * * *"
-    grace: 2h
-```
+??? note "Alternative: in checks.yaml"
+    ```yaml
+    hosts:
+      nas: { beszel: nas, always_on: false, url: { DSM: "https://nas.home.arpa:5001" } }
+    checks:
+      - name: nas/online
+        tags: { host: nas, typ: fenster, prio: normal }
+        schedule: "0 2 * * *"
+        grace: 2h
+    ```
 
 ## Jobs auf der Synology
 

@@ -19,7 +19,7 @@
 
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
-  <a href="https://a13nka.github.io/quietboard/">Documentation</a> ·
+  <a href="https://a13nka.github.io/quietboard/en/">Documentation</a> ·
   <a href="https://github.com/A13nka/quietboard/releases">Releases</a> ·
   <a href="README.de.md">Deutsch</a>
 </p>
@@ -73,7 +73,7 @@ curl -fsSL -H "Authorization: Bearer <token>" http://<server>:8088/api/install/h
 
 Hosts appear within a minute. Report jobs with `hc run <check> -- <command>`.
 
-Prefer not to pipe into bash? Download the release bundle, verify `SHA256SUMS` and run `./install.sh` – see the [installation guide](https://a13nka.github.io/quietboard/install/).
+Prefer not to pipe into bash? Download the release bundle, verify `SHA256SUMS` and run `./install.sh` – see the [installation guide](https://a13nka.github.io/quietboard/en/install/).
 
 ## How it works
 
@@ -108,11 +108,11 @@ Beszel and Healthchecks stay the engines: they keep measuring and alerting even 
 
 ## Documentation
 
-The [documentation](https://a13nka.github.io/quietboard/) covers installation and network variants (LAN, VPN, Tailscale/NetBird, reverse proxy, Cloudflare Tunnel), adding hosts, jobs, notifications, accounts, updates and backups. It is German for now; English follows together with the English UI.
+The [documentation](https://a13nka.github.io/quietboard/en/) ([Deutsch](https://a13nka.github.io/quietboard/)) covers installation and network variants (LAN, VPN, Tailscale/NetBird, reverse proxy, Cloudflare Tunnel), adding hosts, jobs, notifications, accounts, updates and backups.
 
 ## Roadmap
 
-- English documentation
+- English installer output
 - Update reports for more NAS systems (UGREEN, QNAP, TrueNAS, Unraid)
 - More job templates (restic/borg wrappers, Home Assistant, databases)
 
