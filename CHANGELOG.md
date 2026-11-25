@@ -6,6 +6,9 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Geändert
+- `install.sh` zeigt, welche Images geladen werden, mit dem Docker-Fortschritt (statt still im Hintergrund).
+
 ## 0.2.3 – 2026-11-25
 
 ### Behoben
