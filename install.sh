@@ -71,8 +71,12 @@ fi
 ./generate-env.sh >/dev/null
 grep -qE '^ADMIN_EMAIL=.+@.+' .env || die "ADMIN_EMAIL fehlt: erneut aufrufen mit ADMIN_EMAIL=du@example.org"
 
-echo "QuietBoard: starte Dienste (erstes Mal: Images laden, ~1–3 Minuten) …"
-docker compose up -d --quiet-pull --remove-orphans >/tmp/quietboard-up.log 2>&1 \
+# Images sichtbar laden (beim Update: neue Versionen); lokal gebaute Images (STATUS_IMAGE) dürfen fehlen
+echo "QuietBoard: lade Images (erstes Mal ~1–3 Minuten):"
+docker compose config --images 2>/dev/null | sort -u | sed 's/^/  - /'
+docker compose pull --ignore-pull-failures || die "Images konnten nicht geladen werden – Internetverbindung prüfen"
+echo "QuietBoard: starte Dienste …"
+docker compose up -d --remove-orphans >/tmp/quietboard-up.log 2>&1 \
   || { tail -20 /tmp/quietboard-up.log >&2; die "docker compose up fehlgeschlagen"; }
 
 get() { grep -E "^$1=" .env | head -1 | cut -d= -f2- || true; }   # fehlender Eintrag = leer, kein Abbruch
