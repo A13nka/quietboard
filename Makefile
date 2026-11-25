@@ -1,6 +1,6 @@
 # QuietBoard – Entwicklungsbefehle.  make help
 SHELL := /bin/bash
-DEV   := docker compose -f compose.yaml -f compose.dev.yaml
+DEV   := docker compose -f compose.yaml -f dev/compose.dev.yaml
 # venv und Caches liegen bewusst außerhalb des Projektordners (sauberer Checkout, kein Sync von Rechnerabhängigem).
 CACHE := $(HOME)/.cache/quietboard
 VENV  := $(CACHE)/venv

@@ -24,20 +24,14 @@
 </p>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/overview-dark.png">
-    <img src="docs/assets/screens/overview-light.png" width="260" alt="Übersicht: was Aufmerksamkeit braucht">
-  </picture>
+  <img src="docs/assets/screens/overview-light.png#gh-light-mode-only" width="260" alt="Übersicht: was Aufmerksamkeit braucht">
+  <img src="docs/assets/screens/overview-dark.png#gh-dark-mode-only" width="260" alt="Übersicht: was Aufmerksamkeit braucht">
   &nbsp;
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/jobs-dark.png">
-    <img src="docs/assets/screens/jobs-light.png" width="260" alt="Jobs: Backups und Skripte je Host">
-  </picture>
+  <img src="docs/assets/screens/jobs-light.png#gh-light-mode-only" width="260" alt="Jobs: Backups und Skripte je Host">
+  <img src="docs/assets/screens/jobs-dark.png#gh-dark-mode-only" width="260" alt="Jobs: Backups und Skripte je Host">
   &nbsp;
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/updates-dark.png">
-    <img src="docs/assets/screens/updates-light.png" width="260" alt="Updates: ausstehende Pakete je Host">
-  </picture>
+  <img src="docs/assets/screens/updates-light.png#gh-light-mode-only" width="260" alt="Updates: ausstehende Pakete je Host">
+  <img src="docs/assets/screens/updates-dark.png#gh-dark-mode-only" width="260" alt="Updates: ausstehende Pakete je Host">
 </p>
 
 ---

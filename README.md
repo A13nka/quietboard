@@ -24,20 +24,14 @@
 </p>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/overview-dark.png">
-    <img src="docs/assets/screens/overview-light.png" width="260" alt="Overview: what needs attention">
-  </picture>
+  <img src="docs/assets/screens/overview-light.png#gh-light-mode-only" width="260" alt="Overview: what needs attention">
+  <img src="docs/assets/screens/overview-dark.png#gh-dark-mode-only" width="260" alt="Overview: what needs attention">
   &nbsp;
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/jobs-dark.png">
-    <img src="docs/assets/screens/jobs-light.png" width="260" alt="Jobs: backups and scripts per host">
-  </picture>
+  <img src="docs/assets/screens/jobs-light.png#gh-light-mode-only" width="260" alt="Jobs: backups and scripts per host">
+  <img src="docs/assets/screens/jobs-dark.png#gh-dark-mode-only" width="260" alt="Jobs: backups and scripts per host">
   &nbsp;
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/updates-dark.png">
-    <img src="docs/assets/screens/updates-light.png" width="260" alt="Updates: pending packages per host">
-  </picture>
+  <img src="docs/assets/screens/updates-light.png#gh-light-mode-only" width="260" alt="Updates: pending packages per host">
+  <img src="docs/assets/screens/updates-dark.png#gh-dark-mode-only" width="260" alt="Updates: pending packages per host">
 </p>
 
 ---

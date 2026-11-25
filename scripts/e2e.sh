@@ -18,7 +18,7 @@ ADMIN_PASSWORD=$(openssl rand -hex 16)
 HC_SECRET_KEY=$(openssl rand -hex 32)
 INGEST_TOKEN=$(openssl rand -hex 24)
 export ADMIN_PASSWORD HC_SECRET_KEY INGEST_TOKEN
-C=(docker compose -f compose.yaml -f compose.test.yaml --env-file /dev/null)
+C=(docker compose -f compose.yaml -f dev/compose.test.yaml --env-file /dev/null)
 JAR=$(mktemp)
 PW=e2e-admin-passwort-123
 S="http://127.0.0.1:$STATUS_PORT"
