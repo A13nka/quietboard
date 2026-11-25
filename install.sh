@@ -9,7 +9,8 @@
 #
 # Optional per Umgebung: QB_VERSION (z. B. v0.1.0; Standard: neueste stabile Version = latest),
 # PUBLIC_HOST (Adresse, unter der Hosts diesen Server erreichen; Standard: erste IP),
-# TZ, SITE_NAME, STATUS_IMAGE, BIND_ADDR, QB_DIR, QB_BASE_URL (Quelle der Dateien).
+# TZ, SITE_NAME, STATUS_IMAGE, BIND_ADDR, QB_DIR, QB_BASE_URL (Quelle der Dateien),
+# QB_DATA_DIR (z. B. /srv/quietboard: Daten in Ordnern statt Docker-Volumes – nur bei der Erstinstallation).
 # Aus einem Release geladen (…/releases/download/vX.Y.Z/install.sh) ist QB_VERSION bereits fest eingetragen.
 set -euo pipefail
 QB_DIR=${QB_DIR:-$HOME/quietboard}
@@ -43,6 +44,27 @@ chmod +x generate-env.sh
 if [ ! -f config/checks.yaml ]; then
   fetch config/checks.example.yaml config/checks.example.yaml
   printf '# Checks-as-Code – Vorlage: checks.example.yaml\nsettings: {}\nhosts: {}\nchecks: []\n' > config/checks.yaml
+fi
+
+# Daten in Ordnern statt Docker-Volumes: legt die Ordner mit passenden Rechten an und schreibt compose.override.yaml
+# (wird von docker compose automatisch gelesen und von Updates nicht angefasst).
+if [ -n "${QB_DATA_DIR:-}" ] && [ ! -f compose.override.yaml ]; then
+  case $QB_DATA_DIR in /*) ;; *) die "QB_DATA_DIR muss ein absoluter Pfad sein, z. B. /srv/quietboard" ;; esac
+  if docker volume inspect "${COMPOSE_PROJECT_NAME:-quietboard}_status-data" >/dev/null 2>&1; then
+    die "Es gibt schon Docker-Volumes dieser Installation – Umzug in Ordner: siehe Doku, Abschnitt Daten in eigenen Ordnern"
+  fi
+  # über einen Container, damit kein sudo nötig ist (status läuft als UID 10001, Healthchecks als 999)
+  docker run --rm -v "$QB_DATA_DIR:/d" alpine:3.22 sh -c \
+    'mkdir -p /d/status /d/healthchecks /d/beszel /d/bootstrap /d/signal && chown 10001 /d/status && chown 999:999 /d/healthchecks' \
+    || die "Konnte $QB_DATA_DIR nicht anlegen"
+  {
+    echo "# Daten in Ordnern statt Docker-Volumes (angelegt von install.sh, QB_DATA_DIR=$QB_DATA_DIR)"
+    echo "volumes:"
+    for v in status-data:status healthchecks-data:healthchecks beszel-data:beszel bootstrap:bootstrap signal-data:signal; do
+      echo "  ${v%%:*}: { driver: local, driver_opts: { type: none, o: bind, device: $QB_DATA_DIR/${v#*:} } }"
+    done
+  } > compose.override.yaml
+  echo "QuietBoard: Daten liegen in $QB_DATA_DIR (siehe compose.override.yaml)"
 fi
 
 ./generate-env.sh >/dev/null

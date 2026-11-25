@@ -32,6 +32,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 
 from . import auth, bootstrap, config, push
+from . import jobs as jobs_mod
 
 log = logging.getLogger("status")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
@@ -275,6 +276,9 @@ async def fetch_checks(cli: httpx.AsyncClient) -> list[dict]:
                 "host": tags.get("host", ""),
                 "typ": tags.get("typ", ""),
                 "prio": tags.get("prio") or prio.get(c["name"], "normal"),  # Healthchecks-Tag gewinnt (GUI ändert dort)
+                "slug": c.get("slug") or config.slug(c["name"]),
+                "src": tags.get("src", ""),
+                "match": jobs_mod.match_from_tags(tags),
             }
         )
     return out
@@ -395,8 +399,13 @@ async def ensure_alerts() -> None:
         log.warning("Beszel-Alarme: %s", exc)
 
 
+_last_refresh = 0.0
+_refresh_lock = asyncio.Lock()
+
+
 async def refresh() -> None:
-    global cfg
+    global cfg, _last_refresh
+    _last_refresh = time.monotonic()
     try:
         cfg = config.load()
     except Exception as exc:
@@ -518,9 +527,8 @@ def attention() -> list[dict]:
                     "uuid": c["uuid"],
                 }
             )
-    always_on = {v.get("beszel"): k for k, v in (cfg.get("hosts") or {}).items() if v.get("always_on")}
     for h in state["hosts"]:
-        if h["name"] in always_on and h["status"] not in ("up", "paused"):
+        if host_extra(h["name"])["always_on"] and h["status"] not in ("up", "paused"):
             items.append({"level": "bad", "kind": "host", "title": f"{h['name']} offline", "detail": h["status"]})
         if (h.get("disk") or 0) >= 90:
             items.append({"level": "warn", "kind": "host", "title": f"{h['name']} · Disk", "detail": f"{h['disk']:.0f} %"})
@@ -546,8 +554,8 @@ def attention() -> list[dict]:
 def summary() -> dict:
     checks = state["checks"]
     ok = sum(1 for c in checks if c["status"] in ("up", "started", "new", "paused"))
-    always_on = {v.get("beszel") for v in (cfg.get("hosts") or {}).values() if v.get("always_on")}
-    hosts = [h for h in state["hosts"] if h["name"] in always_on]
+    # Alle Hosts zählen, außer solchen mit Zeitfenster (checks.yaml: always_on: false)
+    hosts = [h for h in state["hosts"] if host_extra(h["name"])["always_on"]]
     up = sum(1 for h in hosts if h["status"] == "up")
     hu = host_updates()
     return {
@@ -756,7 +764,12 @@ def host_extra(beszel_name: str) -> dict:
 
 
 @app.get("/api/state")
-async def api_state():
+async def api_state(fresh: int = 0):
+    """fresh=1 (Knopf ↻): Daten sofort neu holen statt bis zur nächsten Abfrage zu warten – höchstens alle 10 s."""
+    if fresh and not DEMO:
+        async with _refresh_lock:
+            if time.monotonic() - _last_refresh >= 10:
+                await refresh()
     return {
         "generated": state["generated"],
         "summary": summary(),
@@ -897,6 +910,9 @@ async def ingest_updates(request: Request):
     if "reboot" in b:
         flags.setdefault(host, {}).update({"reboot": bool(b["reboot"]), "checked": ts})
         _save("flags.json", flags)
+    if not DEMO and host not in {h["name"] for h in state["hosts"]}:
+        # Neuer Host (erster Bericht direkt nach der Installation): gleich nachsehen, ob sein Agent schon da ist
+        asyncio.get_running_loop().call_later(5, lambda: asyncio.create_task(refresh()))
     return {"ok": True, "count": len(items)}
 
 
@@ -912,6 +928,9 @@ async def ingest_pve(request: Request, source: str = "pve", host: str = "pve"):
     fields = b.get("fields") or {}
     title, message = str(b.get("title", "")), str(b.get("message", ""))
     hits = config.match_event(cfg, source, host, fields)
+    seen = {c["slug"] for c in hits}
+    gui_jobs = {"checks": [c for c in state["checks"] if c.get("match")]}  # in der Oberfläche angelegte Jobs
+    hits += [c for c in config.match_event(gui_jobs, source, host, fields) if c["slug"] not in seen]
     failed = severity == "error"
     if hits and CREDS.hc_ping_key:
         async with httpx.AsyncClient(timeout=15, limits=NO_KEEPALIVE) as cli:
@@ -922,12 +941,13 @@ async def ingest_pve(request: Request, source: str = "pve", host: str = "pve"):
                 except Exception as exc:
                     log.error("Ping %s fehlgeschlagen: %s", c["slug"], exc)
         add_event(source, f"{host}: {title}", message, "info")
+        asyncio.get_running_loop().call_later(2, lambda: asyncio.create_task(refresh()))  # Job-Status gleich anzeigen
     else:
         # Unbekanntes Event: nie still verschlucken, wenn es ein Fehler ist
         prio = "normal" if failed else "info"
         add_event(source, f"{host}: {title} (ohne Check)", message, prio)
         if failed:
-            await send_signal(f"🔴 {host}: {title}\n(kein passender Check in checks.yaml)", dedup_key=f"pve:{host}:{title}")
+            await send_signal(f"🔴 {host}: {title}\n(kein passender Job – unter Jobs anlegen)", dedup_key=f"pve:{host}:{title}")
     return {"ok": True, "matched": [c["name"] for c in hits]}
 
 
@@ -1250,6 +1270,113 @@ async def _hc(method: str, path: str, **kw) -> httpx.Response:
         return r
 
 
+def _hc_error(exc: httpx.HTTPError) -> HTTPException:
+    """Fehler von Healthchecks verständlich weitergeben (400 = ungültige Eingabe, z. B. Cron)."""
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 400:
+        try:
+            msg = exc.response.json().get("error", "")
+        except Exception:
+            msg = exc.response.text[:200]
+        return HTTPException(400, f"Healthchecks lehnt ab: {msg}")
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 404:
+        return HTTPException(404, "Job nicht gefunden (inzwischen gelöscht?)")
+    return HTTPException(502, f"Healthchecks nicht erreichbar: {type(exc).__name__}")
+
+
+async def _channel_ids(prio: str) -> str:
+    names = ((cfg.get("settings") or {}).get("channels") or jobs_mod.DEFAULT_CHANNELS).get(prio, [])
+    if not names:
+        return ""
+    by_name = {c["name"]: c["id"] for c in (await _hc("GET", "/api/v3/channels/")).json()["channels"]}
+    return ",".join(by_name[n] for n in names if n in by_name)
+
+
+def _tz() -> str:
+    return (cfg.get("settings") or {}).get("tz") or E("TZ", "") or "UTC"
+
+
+def _uuid_ok(uuid: str) -> None:
+    if not re.fullmatch(r"[0-9a-f-]{36}", uuid):
+        raise HTTPException(400)
+
+
+@app.get("/api/jobs/help")
+async def jobs_help(request: Request):
+    """Alles, was die Oberfläche für Anleitungen braucht (Ping-Adresse, Webhook, bekannte Hosts)."""
+    require_admin(request)
+    base = str(request.base_url).rstrip("/")
+    hosts = sorted({h["name"] for h in state["hosts"]} | {c["host"] for c in state["checks"] if c.get("host")})
+    ping = E("HC_PING_ENDPOINT", "").rstrip("/") or f"{urlparse(base).scheme}://{urlparse(base).hostname}:8000/ping"
+    return {
+        "hosts": hosts,
+        "ping_url": f"{ping}/{CREDS.hc_ping_key or '<ping-key>'}",
+        "webhook": f"{base}/api/ingest/pve",
+        "token": INGEST_TOKEN,
+        "tz": _tz(),
+        "types": jobs_mod.TYPES,
+    }
+
+
+@app.post("/api/checks")
+async def check_create(request: Request):
+    require_admin(request)
+    if not CREDS.hc_api_key:
+        raise HTTPException(503, "Healthchecks ist noch nicht eingerichtet")
+    try:
+        body, prio = jobs_mod.build(await _body(request), _tz())
+    except jobs_mod.JobError as exc:
+        raise HTTPException(400, str(exc)) from None
+    if any(c["name"] == body["name"] for c in state["checks"]):
+        raise HTTPException(409, f"Job {body['name']} gibt es schon")
+    try:
+        body["channels"] = await _channel_ids(prio)
+        created = (await _hc("POST", "/api/v3/checks/", json=body)).json()
+    except httpx.HTTPError as exc:
+        raise _hc_error(exc) from None
+    await refresh()
+    uuid = created.get("uuid") or created.get("unique_key")
+    return {"ok": True, "check": next((c for c in state["checks"] if c["uuid"] == uuid), None), "form": jobs_mod.to_form(created)}
+
+
+@app.get("/api/checks/{uuid}")
+async def check_get(uuid: str, request: Request):
+    require_admin(request)
+    _uuid_ok(uuid)
+    try:
+        return jobs_mod.to_form((await _hc("GET", f"/api/v3/checks/{uuid}")).json())
+    except httpx.HTTPError as exc:
+        raise _hc_error(exc) from None
+
+
+@app.put("/api/checks/{uuid}")
+async def check_update(uuid: str, request: Request):
+    require_admin(request)
+    _uuid_ok(uuid)
+    try:
+        current = (await _hc("GET", f"/api/v3/checks/{uuid}")).json()
+        body, prio = jobs_mod.build(await _body(request), _tz(), current=current)
+        body["channels"] = await _channel_ids(prio)
+        await _hc("POST", f"/api/v3/checks/{uuid}", json=body)
+    except jobs_mod.JobError as exc:
+        raise HTTPException(400, str(exc)) from None
+    except httpx.HTTPError as exc:
+        raise _hc_error(exc) from None
+    await refresh()
+    return {"ok": True, "check": next((c for c in state["checks"] if c["uuid"] == uuid), None)}
+
+
+@app.delete("/api/checks/{uuid}")
+async def check_delete(uuid: str, request: Request):
+    require_admin(request)
+    _uuid_ok(uuid)
+    try:
+        await _hc("DELETE", f"/api/v3/checks/{uuid}")
+    except httpx.HTTPError as exc:
+        raise _hc_error(exc) from None
+    await refresh()
+    return {"ok": True}
+
+
 @app.post("/api/checks/{uuid}/{action}")
 async def check_action(uuid: str, action: str, request: Request):
     require_admin(request)
@@ -1264,7 +1391,7 @@ async def check_action(uuid: str, action: str, request: Request):
                 raise HTTPException(400, "Priorität: kritisch, normal oder info")
             current = (await _hc("GET", f"/api/v3/checks/{uuid}")).json()
             tags = [t for t in current.get("tags", "").split() if not t.startswith("prio:")] + [f"prio:{prio}"]
-            await _hc("POST", f"/api/v3/checks/{uuid}", json={"tags": " ".join(tags)})
+            await _hc("POST", f"/api/v3/checks/{uuid}", json={"tags": " ".join(tags), "channels": await _channel_ids(prio)})
         else:
             raise HTTPException(404)
     except httpx.HTTPError as exc:

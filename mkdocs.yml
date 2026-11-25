@@ -21,6 +21,7 @@ theme:
 
 markdown_extensions:
   - admonition
+  - pymdownx.details
   - tables
   - toc: { permalink: true }
   - pymdownx.superfences
@@ -36,6 +37,7 @@ nav:
       - install/index.md
       - Netzwerk und HTTPS: install/network.md
       - Aktualisieren und Versionen: install/update.md
+      - Daten in eigenen Ordnern: install/storage.md
       - Sicherung, Umzug, Deinstallation: install/backup.md
   - Hosts:
       - hosts/index.md
