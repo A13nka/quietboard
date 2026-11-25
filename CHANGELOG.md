@@ -7,6 +7,8 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 ## Unveröffentlicht
 
 ### Neu
+- **Installer auf Englisch:** `install.sh` spricht Deutsch bei deutscher Server-Locale, sonst Englisch; `LANGUAGE=de|en` erzwingt eine Sprache.
+- **Weitere NAS** (UGREEN, QNAP, TrueNAS SCALE, Unraid, OMV): Doku-Seite mit Wegen für Agent, Update-Berichte und Jobs – ausdrücklich ungetestet.
 - **Englische Dokumentation** unter `/en/` mit Sprachumschalter; das englische README verlinkt dorthin.
 
 ### Geändert

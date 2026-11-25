@@ -49,6 +49,7 @@ nav:
       - hosts/index.md
       - Proxmox VE und PBS: hosts/proxmox.md
       - Synology: hosts/synology.md
+      - Weitere NAS: hosts/nas.md
   - Jobs und Checks: jobs.md
   - Benachrichtigungen: notifications.md
   - Konten und Anmeldung: accounts.md

@@ -28,6 +28,7 @@ nav:
       - hosts/index.md
       - Proxmox VE and PBS: hosts/proxmox.md
       - Synology: hosts/synology.md
+      - Other NAS: hosts/nas.md
   - Jobs and checks: jobs.md
   - Notifications: notifications.md
   - Accounts and sign-in: accounts.md

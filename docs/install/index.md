@@ -42,6 +42,8 @@ Nächste Schritte:
   3. Jeden weiteren Host mit demselben Befehl anbinden (steht auch in der App unter System → Host hinzufügen).
 ```
 
+Der Installer spricht Deutsch, wenn der Server auf Deutsch eingestellt ist, sonst Englisch; `LANGUAGE=de` bzw. `LANGUAGE=en` vor `bash` erzwingt eine Sprache.
+
 !!! tip "Der Server ist auch ein Host"
     Der Installer richtet nur QuietBoard selbst ein. Damit der Server in der Host-Liste erscheint (CPU, RAM, Disk, Updates), auf ihm einmal den Host-Befehl aus Schritt 2 ausführen – genau wie auf jedem anderen Rechner.
 

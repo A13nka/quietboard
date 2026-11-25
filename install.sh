@@ -24,14 +24,17 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(dirname "${BASH_SOURCE[0]}")/compose.
   src=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 fi
 
+# Sprache der Ausgabe: LANGUAGE=de|en, sonst nach der Server-Locale (de_* → Deutsch, sonst Englisch)
+case "${LANGUAGE:-${LC_ALL:-${LANG:-}}}" in de*) QL=de ;; *) QL=en ;; esac
+m() { if [ "$QL" = de ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }   # m "deutsch" "english"
 die() { echo "QuietBoard: $*" >&2; exit 1; }
-command -v docker >/dev/null || die "Docker fehlt – Anleitung: https://docs.docker.com/engine/install/"
-docker compose version >/dev/null 2>&1 || die "Docker Compose (Plugin) fehlt"
-docker info >/dev/null 2>&1 || die "Kein Zugriff auf Docker – Benutzer in die Gruppe docker aufnehmen oder mit sudo ausführen"
-command -v openssl >/dev/null || die "openssl fehlt (apt-get install openssl)"
+command -v docker >/dev/null || die "$(m "Docker fehlt – Anleitung" "Docker is missing – see"): https://docs.docker.com/engine/install/"
+docker compose version >/dev/null 2>&1 || die "$(m "Docker Compose (Plugin) fehlt" "Docker Compose (plugin) is missing")"
+docker info >/dev/null 2>&1 || die "$(m "Kein Zugriff auf Docker – Benutzer in die Gruppe docker aufnehmen oder mit sudo ausführen" "No access to Docker – add your user to the docker group or run with sudo")"
+command -v openssl >/dev/null || die "$(m "openssl fehlt" "openssl is missing") (apt-get install openssl)"
 
-echo "QuietBoard: installiere nach $QB_DIR (andere Stelle: QB_DIR=/pfad vor bash)"
-mkdir -p "$QB_DIR/config" || die "Kann $QB_DIR nicht anlegen – Ordner mit Schreibrecht wählen, z. B. QB_DIR=\$HOME/quietboard"
+echo "QuietBoard: $(m "installiere nach $QB_DIR (andere Stelle: QB_DIR=/pfad vor bash)" "installing to $QB_DIR (other location: QB_DIR=/path before bash)")"
+mkdir -p "$QB_DIR/config" || die "$(m "Kann $QB_DIR nicht anlegen – Ordner mit Schreibrecht wählen" "Cannot create $QB_DIR – choose a writable folder"), QB_DIR=\$HOME/quietboard"
 cd "$QB_DIR"
 fetch() { # <datei> [ziel]
   local target=${2:-$1}
@@ -50,14 +53,14 @@ fi
 # Daten in Ordnern statt Docker-Volumes: legt die Ordner mit passenden Rechten an und schreibt compose.override.yaml
 # (wird von docker compose automatisch gelesen und von Updates nicht angefasst).
 if [ -n "${QB_DATA_DIR:-}" ] && [ ! -f compose.override.yaml ]; then
-  case $QB_DATA_DIR in /*) ;; *) die "QB_DATA_DIR muss ein absoluter Pfad sein, z. B. /srv/quietboard" ;; esac
+  case $QB_DATA_DIR in /*) ;; *) die "$(m "QB_DATA_DIR muss ein absoluter Pfad sein" "QB_DATA_DIR must be an absolute path"), /srv/quietboard" ;; esac
   if docker volume inspect "${COMPOSE_PROJECT_NAME:-quietboard}_status-data" >/dev/null 2>&1; then
-    die "Es gibt schon Docker-Volumes dieser Installation – Umzug in Ordner: siehe Doku, Abschnitt Daten in eigenen Ordnern"
+    die "$(m "Es gibt schon Docker-Volumes dieser Installation – Umzug in Ordner: siehe Doku, Daten in eigenen Ordnern" "Docker volumes of this installation already exist – moving to folders: see the docs, Data in your own folders")"
   fi
   # über einen Container, damit kein sudo nötig ist (status läuft als UID 10001, Healthchecks als 999)
   docker run --rm -v "$QB_DATA_DIR:/d" alpine:3.22 sh -c \
     'mkdir -p /d/status /d/healthchecks /d/beszel /d/bootstrap /d/signal && chown 10001 /d/status && chown 999:999 /d/healthchecks' \
-    || die "Konnte $QB_DATA_DIR nicht anlegen"
+    || die "$(m "Konnte $QB_DATA_DIR nicht anlegen" "Could not create $QB_DATA_DIR")"
   {
     echo "# Daten in Ordnern statt Docker-Volumes (angelegt von install.sh, QB_DATA_DIR=$QB_DATA_DIR)"
     echo "volumes:"
@@ -65,19 +68,19 @@ if [ -n "${QB_DATA_DIR:-}" ] && [ ! -f compose.override.yaml ]; then
       echo "  ${v%%:*}: { driver: local, driver_opts: { type: none, o: bind, device: $QB_DATA_DIR/${v#*:} } }"
     done
   } > compose.override.yaml
-  echo "QuietBoard: Daten liegen in $QB_DATA_DIR (siehe compose.override.yaml)"
+  echo "QuietBoard: $(m "Daten liegen in $QB_DATA_DIR (siehe compose.override.yaml)" "data is stored in $QB_DATA_DIR (see compose.override.yaml)")"
 fi
 
 ./generate-env.sh >/dev/null
-grep -qE '^ADMIN_EMAIL=.+@.+' .env || die "ADMIN_EMAIL fehlt: erneut aufrufen mit ADMIN_EMAIL=du@example.org"
+grep -qE '^ADMIN_EMAIL=.+@.+' .env || die "$(m "ADMIN_EMAIL fehlt: erneut aufrufen mit ADMIN_EMAIL=du@example.org" "ADMIN_EMAIL is missing: run again with ADMIN_EMAIL=you@example.org")"
 
 # Images sichtbar laden (beim Update: neue Versionen); lokal gebaute Images (STATUS_IMAGE) dürfen fehlen
-echo "QuietBoard: lade Images (erstes Mal ~1–3 Minuten):"
+echo "QuietBoard: $(m "lade Images (erstes Mal ~1–3 Minuten):" "pulling images (first time ~1–3 minutes):")"
 docker compose config --images 2>/dev/null | sort -u | sed 's/^/  - /'
-docker compose pull --ignore-pull-failures || die "Images konnten nicht geladen werden – Internetverbindung prüfen"
-echo "QuietBoard: starte Dienste …"
+docker compose pull --ignore-pull-failures || die "$(m "Images konnten nicht geladen werden – Internetverbindung prüfen" "Could not pull images – check the internet connection")"
+echo "QuietBoard: $(m "starte Dienste …" "starting services …")"
 docker compose up -d --remove-orphans >/tmp/quietboard-up.log 2>&1 \
-  || { tail -20 /tmp/quietboard-up.log >&2; die "docker compose up fehlgeschlagen"; }
+  || { tail -20 /tmp/quietboard-up.log >&2; die "docker compose up $(m "fehlgeschlagen" "failed")"; }
 
 get() { grep -E "^$1=" .env | head -1 | cut -d= -f2- || true; }   # fehlender Eintrag = leer, kein Abbruch
 port=$(get STATUS_PORT); port=${port:-8088}
@@ -85,7 +88,7 @@ for _ in $(seq 1 90); do
   curl -fs -o /dev/null "http://127.0.0.1:$port/healthz" && break
   sleep 2
 done
-curl -fsS -o /dev/null "http://127.0.0.1:$port/healthz" || die "App antwortet nicht – docker compose logs status"
+curl -fsS -o /dev/null "http://127.0.0.1:$port/healthz" || die "$(m "App antwortet nicht" "App does not respond") – docker compose logs status"
 for _ in $(seq 1 60); do
   hs=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(get INGEST_TOKEN)" "http://127.0.0.1:$port/api/install/host.sh")
   [ "$hs" = 200 ] && break
@@ -94,11 +97,12 @@ done
 
 host=$(get BESZEL_PUBLIC_URL | sed -E 's#^https?://##; s#[:/].*##')
 # Einrichtungscode nur zeigen, solange noch kein Konto existiert (beim Update steht im Log noch der alte)
-step1="öffnen und anmelden"
+step1=$(m "http://$host:$port öffnen und anmelden" "Open http://$host:$port and sign in")
 if curl -fsS -m 5 "http://127.0.0.1:$port/api/auth/state" 2>/dev/null | grep -q '"setup_needed":true'; then
   code=$(docker compose logs status 2>/dev/null | grep -o 'Einrichtungscode: [A-Z0-9]\{4\}-[A-Z0-9]\{4\}' | tail -1 | cut -d' ' -f2 || true)
-  step1="öffnen und das Admin-Konto anlegen${code:+ – Einrichtungscode: $code}"
+  step1="$(m "http://$host:$port öffnen und das Admin-Konto anlegen" "Open http://$host:$port and create the admin account")${code:+ – $(m Einrichtungscode "setup code"): $code}"
 fi
+if [ "$QL" = de ]; then
 cat <<EOF
 
 QuietBoard läuft – installiert in $QB_DIR
@@ -108,10 +112,27 @@ QuietBoard läuft – installiert in $QB_DIR
   Login für Healthchecks und Beszel: $(get ADMIN_EMAIL), Passwort: grep ADMIN_PASSWORD $QB_DIR/.env
 
 Nächste Schritte:
-  1. http://$host:$port $step1
+  1. $step1
   2. Diesen Server selbst als Host anbinden (als root oder Benutzer mit sudo):
        curl -fsSL -H "Authorization: Bearer $(get INGEST_TOKEN)" http://$host:$port/api/install/host.sh | bash
   3. Jeden weiteren Host mit demselben Befehl anbinden (steht auch in der App unter System → Host hinzufügen).
 
 EOF
-[ "$hs" = 200 ] || echo "Hinweis: Host-Installer noch nicht bereit (HTTP $hs) – in einer Minute erneut versuchen."
+else
+cat <<EOF
+
+QuietBoard is running – installed in $QB_DIR
+  App           http://$host:$port
+  Healthchecks  $(get HC_PUBLIC_URL)
+  Beszel        $(get BESZEL_PUBLIC_URL)
+  Login for Healthchecks and Beszel: $(get ADMIN_EMAIL), password: grep ADMIN_PASSWORD $QB_DIR/.env
+
+Next steps:
+  1. $step1
+  2. Connect this server itself as a host (as root or a user with sudo):
+       curl -fsSL -H "Authorization: Bearer $(get INGEST_TOKEN)" http://$host:$port/api/install/host.sh | bash
+  3. Connect every other host with the same command (also in the app under System → Add host).
+
+EOF
+fi
+[ "$hs" = 200 ] || echo "$(m "Hinweis: Host-Installer noch nicht bereit" "Note: host installer not ready yet") (HTTP $hs) – $(m "in einer Minute erneut versuchen" "try again in a minute")."

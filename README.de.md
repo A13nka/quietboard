@@ -112,8 +112,7 @@ Die [Dokumentation](https://a13nka.github.io/quietboard/) ([English](https://a13
 
 ## Ausblick
 
-- Englische Ausgabe des Installers
-- Update-Berichte für weitere NAS-Systeme (UGREEN, QNAP, TrueNAS, Unraid)
+- Getestete Update-Berichte für weitere NAS (UGREEN, QNAP, TrueNAS, Unraid) – Rezepte gibt es, Tests auf echter Hardware fehlen
 - Weitere Job-Vorlagen (restic/borg, Home Assistant, Datenbanken)
 
 ## Mitmachen
