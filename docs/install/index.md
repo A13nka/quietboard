@@ -66,13 +66,13 @@ GitHub liefert Dateien und Images privater Repositories nur mit Anmeldung aus �
 1. **Token für Images** anlegen: github.com → Settings → Developer settings → Personal access tokens → *Tokens (classic)* → nur `read:packages`.
 2. **Paket auf den Server bringen** (auf dem eigenen Rechner, mit angemeldetem `gh`):
    ```bash
-   gh release download v0.1.1 -R A13nka/quietboard -p 'quietboard-v0.1.1.tar.gz'
-   scp quietboard-v0.1.1.tar.gz <benutzer>@<server>:
+   gh release download -R A13nka/quietboard -p 'quietboard-*.tar.gz'   # neuestes Release
+   scp quietboard-v*.tar.gz <benutzer>@<server>:
    ```
 3. **Auf dem Server** einmal bei GHCR anmelden und installieren:
    ```bash
    docker login ghcr.io -u <github-name>        # Passwort = Token aus Schritt 1
-   tar xzf quietboard-v0.1.1.tar.gz && cd quietboard-v0.1.1
+   tar xzf quietboard-v*.tar.gz && cd quietboard-v*/
    ADMIN_EMAIL=du@example.org ./install.sh
    ```
 
