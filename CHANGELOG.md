@@ -6,6 +6,8 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+## 0.2.2 – 2026-11-25
+
 ### Geändert
 - `install.sh` zeigt den Einrichtungscode nur noch, solange kein Konto existiert (beim Update erschien sonst der alte Code).
 - `install.sh` nennt den Installationsordner (`QB_DIR`, Standard `~/quietboard`) und zeigt am Ende nummerierte nächste Schritte – inklusive „diesen Server selbst als Host anbinden“.
