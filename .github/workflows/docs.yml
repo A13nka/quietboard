@@ -3,7 +3,7 @@ name: Docs
 on:
   push:
     branches: [main]
-    paths: ["docs/**", "mkdocs.yml", "mkdocs.en.yml", "requirements-docs.txt"]
+    paths: ["docs/**", "mkdocs.yml", "mkdocs.en.yml", "requirements-docs.txt", ".github/workflows/docs.yml"]
   workflow_dispatch:
 
 permissions:
@@ -28,8 +28,8 @@ jobs:
         run: |
           NO_MKDOCS_2_WARNING=1 mkdocs build --strict -d site
           NO_MKDOCS_2_WARNING=1 mkdocs build --strict -f mkdocs.en.yml -d site/en
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
       - id: pages
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
