@@ -108,11 +108,11 @@ Beszel und Healthchecks bleiben die Motoren: Sie messen und alarmieren weiter, a
 
 ## Dokumentation
 
-Die [Dokumentation](https://a13nka.github.io/quietboard/) beschreibt Installation und Netzwerk-Varianten (LAN, VPN, Tailscale/NetBird, Reverse Proxy, Cloudflare Tunnel), Hosts anbinden, Jobs, Benachrichtigungen, Konten, Updates und Sicherung.
+Die [Dokumentation](https://a13nka.github.io/quietboard/) ([English](https://a13nka.github.io/quietboard/en/)) beschreibt Installation und Netzwerk-Varianten (LAN, VPN, Tailscale/NetBird, Reverse Proxy, Cloudflare Tunnel), Hosts anbinden, Jobs, Benachrichtigungen, Konten, Updates und Sicherung.
 
 ## Ausblick
 
-- Englische Dokumentation
+- Englische Ausgabe des Installers
 - Update-Berichte für weitere NAS-Systeme (UGREEN, QNAP, TrueNAS, Unraid)
 - Weitere Job-Vorlagen (restic/borg, Home Assistant, Datenbanken)
 

@@ -53,5 +53,7 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-docs.txt
       - run: pip install -r requirements-docs.txt
-      - name: Doku bauen (strict – bricht bei kaputten Links ab)
-        run: NO_MKDOCS_2_WARNING=1 mkdocs build --strict
+      - name: Doku bauen, Deutsch und Englisch (strict – bricht bei kaputten Links ab)
+        run: |
+          NO_MKDOCS_2_WARNING=1 mkdocs build --strict -d site
+          NO_MKDOCS_2_WARNING=1 mkdocs build --strict -f mkdocs.en.yml -d site/en

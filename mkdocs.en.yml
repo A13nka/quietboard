@@ -1,0 +1,37 @@
+# Englische Doku: eigene Website unter /en/, gebaut mit  mkdocs build -f mkdocs.en.yml -d site/en
+INHERIT: mkdocs.yml
+site_description: Metrics, jobs and updates of your homelab in one calm view – sets itself up.
+docs_dir: docs/en
+edit_uri: edit/main/docs/en/
+exclude_docs: |
+  drafts/
+
+theme:
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: { icon: material/brightness-7, name: Dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: { icon: material/brightness-4, name: Light mode }
+
+nav:
+  - Home: index.md
+  - Installation:
+      - install/index.md
+      - Network and HTTPS: install/network.md
+      - Updates and versions: install/update.md
+      - Data in your own folders: install/storage.md
+      - Backup, migration, uninstall: install/backup.md
+  - Hosts:
+      - hosts/index.md
+      - Proxmox VE and PBS: hosts/proxmox.md
+      - Synology: hosts/synology.md
+  - Jobs and checks: jobs.md
+  - Notifications: notifications.md
+  - Accounts and sign-in: accounts.md
+  - Reference:
+      - ".env": reference/env.md
+      - API: reference/api.md
+  - FAQ: faq.md

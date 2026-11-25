@@ -26,7 +26,7 @@ Alle Funktionen der Oberfläche laufen über diese API. Basis: `http://<server>:
 | --- | --- | --- |
 | `GET /api/state` | alle | Gesamtzustand: Zusammenfassung, Aufmerksamkeit, Checks, Hosts, Updates, Meldungen (`?fresh=1`: vorher neu abfragen, höchstens alle 10 s) |
 | `GET /api/check/{uuid}/log` | alle | letzter Lauf eines Checks mit Log |
-| `GET /api/settings` · `PUT /api/settings` | alle · Admin | `mail_to`, `digest_time` |
+| `GET /api/settings` · `PUT /api/settings` | alle · Admin | `mail_to`, `digest_time`, `language` (`de`/`en`) |
 | `POST /api/notify/test` | Admin (Push: alle) | `{"channel":"mail\|push\|signal"}` |
 | `POST /api/digest/test` | Admin | Morgenmeldung jetzt senden |
 | `POST /api/checks` | Admin | Job anlegen: `{"host","job","mode":"cron\|period","schedule"\|"period","grace","prio","typ","src":"hc\|url\|pve\|pbs","ev","job_id","ds","desc"}` |

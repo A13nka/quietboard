@@ -11,7 +11,7 @@ QuietBoard läuft als Docker-Compose-Stack auf einem Linux-Server: einem kleinen
 | Disk | 10 GB frei | 20 GB |
 | Software | Docker Engine mit Compose-Plugin, `curl`, `openssl` | – |
 
-Gemessen auf einer 2-GB-VM ohne Swap: Der ganze Stack braucht etwa 330 MB (Healthchecks ≈ 270 MB, App ≈ 70 MB, Beszel ≈ 15 MB); mit Signal kommen ≈ 180 MB dazu.
+Gemessen auf einer 2-GB-VM ohne Swap: Der ganze Stack braucht etwa 350 MB (Healthchecks ≈ 270 MB, App ≈ 70 MB, Beszel ≈ 15 MB); mit Signal kommen ≈ 180 MB dazu.
 
 Docker installieren (falls noch nicht vorhanden): [docs.docker.com/engine/install](https://docs.docker.com/engine/install/). Danach den eigenen Benutzer in die Gruppe `docker` aufnehmen (`sudo usermod -aG docker $USER`, neu anmelden).
 
@@ -45,7 +45,7 @@ Nächste Schritte:
 !!! tip "Der Server ist auch ein Host"
     Der Installer richtet nur QuietBoard selbst ein. Damit der Server in der Host-Liste erscheint (CPU, RAM, Disk, Updates), auf ihm einmal den Host-Befehl aus Schritt 2 ausführen – genau wie auf jedem anderen Rechner.
 
-Optionen per Umgebung vor `bash`: `QB_VERSION=v0.2.1` (bestimmte Version), `PUBLIC_HOST=status.example.org` (Adresse, unter der Hosts den Server erreichen), `TZ=Europe/Berlin`, `SITE_NAME=Homelab`, `QB_DIR=/opt/quietboard`, `QB_DATA_DIR=/srv/quietboard` (Daten in Ordnern statt Docker-Volumes, siehe [Daten in eigenen Ordnern](storage.md)).
+Optionen per Umgebung vor `bash`: `QB_VERSION=v0.4.0` (bestimmte Version), `PUBLIC_HOST=status.example.org` (Adresse, unter der Hosts den Server erreichen), `TZ=Europe/Berlin`, `SITE_NAME=Homelab`, `QB_DIR=/opt/quietboard`, `QB_DATA_DIR=/srv/quietboard` (Daten in Ordnern statt Docker-Volumes, siehe [Daten in eigenen Ordnern](storage.md)).
 
 ## Erste Schritte nach der Installation
 
@@ -61,7 +61,7 @@ Wer nichts per `curl | bash` ausführen möchte: unter [Releases](https://github
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
-tar xzf quietboard-v0.1.1.tar.gz && cd quietboard-v0.1.1
+tar xzf quietboard-v*.tar.gz && cd quietboard-v*/
 ADMIN_EMAIL=du@example.org ./install.sh
 ```
 
