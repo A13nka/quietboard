@@ -11,6 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/A13nka/quietboard/actions/workflows/ci.yml"><img src="https://github.com/A13nka/quietboard/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/A13nka/quietboard/releases/latest"><img src="https://img.shields.io/github/v/release/A13nka/quietboard?label=release" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" alt="amd64 and arm64">
   <img src="https://img.shields.io/badge/self--hosted-no%20cloud%20required-5cb84a" alt="self-hosted">
