@@ -6,6 +6,8 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+## 0.5.1 – 2026-11-25
+
 ### Behoben
 - Beszel: Gibt es schon einen Webhook zur App (z. B. einer Vorgänger-App unter `status-app`), legt QuietBoard keinen zweiten an – sonst kam jeder Alarm doppelt.
 
