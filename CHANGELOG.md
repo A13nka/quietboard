@@ -6,6 +6,8 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+## 0.2.0 – 2026-11-25
+
 ### Neu
 - **Jobs in der Oberfläche anlegen, bearbeiten und löschen** – mit Vorlagen (Backup-Skript, Cronjob, Zertifikat, Proxmox VE, Proxmox Backup Server, Software mit Ping-URL). Nach dem Anlegen und in jeder Job-Zeile steht eine fertig ausgefüllte Anleitung (hc-Befehl, Cron-Zeile, Ping-Adresse oder Proxmox-Webhook) mit Kopieren-Knöpfen. `checks.yaml` bleibt als Alternative.
 - Proxmox-Webhooks treffen auch Jobs, die in der Oberfläche angelegt wurden.
