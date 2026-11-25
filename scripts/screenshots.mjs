@@ -42,7 +42,7 @@ async function shot(name, { w, h, dpr, scheme, tab, js }) {
 const phone = { w: 390, h: 844, dpr: 2 };
 await send("Page.enable");
 for (const scheme of ["dark", "light"]) {
-  await shot(`overview-${scheme}`, { ...phone, scheme });
+  await shot(`overview-${scheme}`, { ...phone, scheme, tab: "Übersicht" });
   await shot(`jobs-${scheme}`, { ...phone, scheme, tab: "Jobs" });
   await shot(`updates-${scheme}`, { ...phone, scheme, tab: "Updates" });
 }
