@@ -6,6 +6,8 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+## 0.1.2 – 2026-11-25
+
 ### Geändert
 - Name in der Oberfläche, in Meldungen und in der Doku: **QuietBoard** (technische Namen wie Image, Ordner und Volumes bleiben `quietboard`).
 - Neues Repository mit frischer Historie; README auf Englisch und Deutsch neu gestaltet (Screenshots, Schnellstart, Diagramm), Logo in der Doku.
