@@ -6,6 +6,12 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Behoben
+- Beszel: Gibt es schon einen Webhook zur App (z. B. einer Vorgänger-App unter `status-app`), legt QuietBoard keinen zweiten an – sonst kam jeder Alarm doppelt.
+
+### Geändert
+- Übernahme: Der bisherige Beszel-Login kann als `ADMIN_EMAIL` weiterverwendet werden (Doku).
+
 ## 0.5.0 – 2026-11-25
 
 ### Neu
