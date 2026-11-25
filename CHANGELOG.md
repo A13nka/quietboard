@@ -6,6 +6,9 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Behoben
+- Anmeldeseite zeigte nach der Einrichtung weiterhin die Felder „Einrichtungscode“ und „Name“ (CSS überstimmte `hidden`).
+
 ## 0.2.2 – 2026-11-25
 
 ### Geändert
