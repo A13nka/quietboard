@@ -50,7 +50,7 @@ QuietBoard installiert beide, richtet sie für dich ein und legt eine ruhige Ans
 - **Richtet sich selbst ein** – ein Befehl installiert den Stack; Healthchecks und Beszel werden samt Alarmen automatisch eingerichtet.
 - **Ein Befehl pro Host** – Beszel-Agent (Docker oder Binary), Job-Helfer `hc`, Update-Bericht und automatische Sicherheitsupdates. Debian, Ubuntu, Proxmox und Synology.
 - **Keine Cloud nötig** – läuft komplett im LAN oder VPN. Cloudflare, Tailscale & Co. sind optional.
-- **Konten und Rollen** – Admins und Nur-Lesen-Benutzer, Schutz gegen Login-Raten, optional Cloudflare Access.
+- **Konten und Rollen** – Admins und Nur-Lesen-Benutzer, API-Tokens für eigene Skripte, Schutz gegen Login-Raten, optional Cloudflare Access.
 - **Jobs mit wenigen Klicks** – Vorlagen für Backup-Skripte, Cronjobs, Zertifikate, Proxmox VE/PBS und Software mit Ping-URL; QuietBoard zeigt genau, was wo einzutragen ist. Lieber als Datei? `checks.yaml` geht auch.
 - **Skriptbar** – jede Aktion geht auch über die API.
 
@@ -112,8 +112,8 @@ Die [Dokumentation](https://a13nka.github.io/quietboard/) beschreibt Installatio
 ## Ausblick
 
 - Englische Oberfläche und Doku
-- Checks und Rezepte in der Oberfläche, API-Tokens, YAML-Export/-Import
 - Update-Berichte für weitere NAS-Systeme (UGREEN, QNAP, TrueNAS, Unraid)
+- Weitere Job-Vorlagen (restic/borg, Home Assistant, Datenbanken)
 
 ## Mitmachen
 

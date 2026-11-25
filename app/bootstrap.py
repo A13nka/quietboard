@@ -189,6 +189,19 @@ def default_alerts(down_min: int) -> list[dict]:
     ]
 
 
+async def delete_beszel_system(base_url: str, admin_email: str, admin_password: str, name: str) -> bool:
+    """Host aus Beszel entfernen (Superuser). False, wenn es ihn dort nicht gibt."""
+    async with httpx.AsyncClient(base_url=base_url, timeout=15) as cli:
+        su = await _auth(cli, "_superusers", admin_email, admin_password)
+        h = {"Authorization": su["token"]}
+        r = await cli.get("/api/collections/systems/records", params={"filter": f"name={json.dumps(name)}", "perPage": 5}, headers=h)
+        r.raise_for_status()
+        items = r.json().get("items", [])
+        for it in items:
+            (await cli.delete(f"/api/collections/systems/records/{it['id']}", headers=h)).raise_for_status()
+        return bool(items)
+
+
 async def ensure_beszel_alerts(
     base_url: str,
     admin_email: str,

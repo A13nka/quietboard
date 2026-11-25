@@ -84,3 +84,43 @@ def test_to_form_roundtrip():
 
 def test_human():
     assert [jobs.human(s) for s in (60, 5400, 7200, 86400, 90)] == ["1m", "90m", "2h", "1d", "90s"]
+
+
+def test_yaml_roundtrip_keeps_proxmox_match_and_source():
+    hc = {
+        "name": "pbs/gc",
+        "slug": "pbs-gc",
+        "tags": "host:pbs typ:gc prio:normal src:pbs ev:gc ds:store1",
+        "grace": 7200,
+        "schedule": "30 4 * * *",
+        "tz": "UTC",
+    }
+    y = jobs.to_yaml_check(hc, "UTC")
+    assert y == {
+        "name": "pbs/gc",
+        "tags": {"host": "pbs", "typ": "gc", "prio": "normal", "src": "pbs"},
+        "schedule": "30 4 * * *",
+        "grace": "2h",
+        "match": {"source": "pbs", "host": "pbs", "type": "gc", "datastore": "store1"},
+    }
+    body, prio = jobs.from_yaml_check(y, "UTC")
+    assert body["name"] == "pbs/gc" and body["slug"] == "pbs-gc" and prio == "normal"
+    assert set(body["tags"].split()) == set(hc["tags"].split())
+
+
+def test_yaml_checks_from_hc_sync_format():
+    """Ein Eintrag wie in checks.example.yaml (ohne src, mit match) wird zum PVE-Job."""
+    body, prio = jobs.from_yaml_check(
+        {
+            "name": "proxmox/vzdump",
+            "tags": {"host": "proxmox", "typ": "backup", "prio": "kritisch"},
+            "schedule": "0 1 * * *",
+            "grace": "3h",
+            "match": {"source": "pve", "host": "proxmox", "type": ["vzdump"]},
+        },
+        "Europe/Berlin",
+    )
+    assert prio == "kritisch" and body["tz"] == "Europe/Berlin"
+    assert "src:pve" in body["tags"] and "ev:vzdump" in body["tags"]
+    with pytest.raises(jobs.JobError):
+        jobs.from_yaml_check({"name": "x", "schedule": "täglich"}, "UTC")

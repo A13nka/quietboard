@@ -67,7 +67,7 @@ def match_from_tags(tags: dict) -> dict | None:
     return m
 
 
-def build(d: dict, tz: str, current: dict | None = None) -> tuple[dict, str]:
+def build(d: dict, tz: str, current: dict | None = None, extra_tags: dict | None = None) -> tuple[dict, str]:
     """Formular → Healthchecks-Body. Beim Bearbeiten (current = Check aus Healthchecks) bleiben Name und Slug.
 
     Gibt (body, prio) zurück; die Kanäle setzt der Aufrufer passend zur Priorität."""
@@ -86,14 +86,15 @@ def build(d: dict, tz: str, current: dict | None = None) -> tuple[dict, str]:
     prio = d.get("prio") or "normal"
     if prio not in PRIOS:
         raise JobError("Priorität: kritisch, normal oder info")
-    typ = d.get("typ") or "skript"
-    if typ not in TYPES:
-        raise JobError("Art: " + ", ".join(TYPES))
+    typ = str(d.get("typ") or "skript").strip().lower()
+    if not _NAME.fullmatch(typ):
+        raise JobError("Art: ein Wort, z. B. " + ", ".join(TYPES[:4]))
     src = d.get("src") or "hc"
     if src not in SOURCES:
         raise JobError("Meldeweg unbekannt")
 
     tags = {k: v for k, v in _tags((current or {}).get("tags", "")).items() if k not in MANAGED_TAGS}
+    tags.update({str(k): str(v) for k, v in (extra_tags or {}).items() if k not in MANAGED_TAGS and _TAGVAL.fullmatch(str(v))})
     tags.update(host=host, typ=typ, prio=prio, src=src)
     if src in ("pve", "pbs"):
         ev = str(d.get("ev") or "").strip().lower().replace(" ", "")
@@ -147,3 +148,62 @@ def to_form(c: dict) -> dict:
         "desc": c.get("desc", ""),
         "slug": c.get("slug") or config.slug(c["name"]),
     }
+
+
+# ---------------------------------------------------------------- YAML (checks.yaml-Format)
+def to_yaml_check(c: dict, tz: str) -> dict:
+    """Healthchecks-Check → Eintrag für checks.yaml (auch mit hc_sync nutzbar)."""
+    tags = _tags(c.get("tags", ""))
+    out: dict = {"name": c["name"], "tags": {k: v for k, v in tags.items() if k not in ("ev", "job", "ds")}}
+    if tags.get("src") == "hc":
+        out["tags"].pop("src")
+    if c.get("schedule"):
+        out["schedule"] = c["schedule"]
+        if c.get("tz") and c["tz"] != tz:
+            out["tz"] = c["tz"]
+    else:
+        out["period"] = human(c.get("timeout"))
+    out["grace"] = human(c.get("grace"))
+    if c.get("desc"):
+        out["desc"] = c["desc"]
+    m = match_from_tags(tags)
+    if m:
+        if len(m.get("type", [])) == 1:
+            m["type"] = m["type"][0]
+        out["match"] = m
+    return out
+
+
+def from_yaml_check(c: dict, tz: str) -> tuple[dict, str]:
+    """Eintrag aus checks.yaml → Healthchecks-Body (wie build, PVE/PBS-match wird zu Tags)."""
+    if not isinstance(c, dict) or not c.get("name"):
+        raise JobError("Eintrag ohne name")
+    name = str(c["name"]).strip().lower()
+    host, sep, job = name.partition("/")
+    if not sep:
+        host, job = (c.get("tags") or {}).get("host", "sonstige"), name
+    tags = {str(k): str(v) for k, v in (c.get("tags") or {}).items()}
+    m = c.get("match") or {}
+    types = m.get("type")
+    d = {
+        "host": host,
+        "job": job,
+        "mode": "cron" if c.get("schedule") else "period",
+        "schedule": c.get("schedule", ""),
+        "tz": c.get("tz") or tz,
+        "period": c.get("period", "1d"),
+        "grace": c.get("grace", "1h"),
+        "prio": tags.get("prio", "normal"),
+        "typ": tags.get("typ", "skript"),
+        "src": tags.get("src") or m.get("source") or "hc",
+        "ev": ",".join(types) if isinstance(types, list) else (types or ""),
+        "job_id": m.get("job_id", ""),
+        "ds": m.get("datastore", ""),
+        "desc": c.get("desc", ""),
+    }
+    if d["src"] in ("pve", "pbs") and not d["ev"]:
+        d["ev"] = "vzdump" if d["src"] == "pve" else "verify"
+    body, prio = build(d, tz, extra_tags={k: v for k, v in tags.items() if k != "host"})
+    body["name"] = str(c["name"]).strip()  # Name wie in der Datei (so passt er zu bestehenden Checks)
+    body["slug"] = config.slug(body["name"])
+    return body, prio

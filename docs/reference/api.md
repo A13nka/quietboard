@@ -7,6 +7,7 @@ Alle Funktionen der Oberfläche laufen über diese API. Basis: `http://<server>:
 | Art | Für | Wie |
 | --- | --- | --- |
 | Sitzung | Browser, eigene Skripte | `POST /api/auth/login` `{"email","password"}` → Cookie `qb_session`. Schreibende Aufrufe brauchen einen passenden `Origin`-Header. |
+| API-Token | eigene Skripte | `Authorization: Bearer qb_…` – angelegt unter System → API-Tokens, Rechte wie das Konto, kein `Origin` nötig |
 | Ingest-Token | Hosts, Webhooks | `Authorization: Bearer <INGEST_TOKEN>` (alternativ `X-Token` oder `?token=`) |
 
 ## Für Hosts und Webhooks (Ingest-Token)
@@ -30,6 +31,10 @@ Alle Funktionen der Oberfläche laufen über diese API. Basis: `http://<server>:
 | `POST /api/digest/test` | Admin | Morgenmeldung jetzt senden |
 | `POST /api/checks` | Admin | Job anlegen: `{"host","job","mode":"cron\|period","schedule"\|"period","grace","prio","typ","src":"hc\|url\|pve\|pbs","ev","job_id","ds","desc"}` |
 | `GET` · `PUT` · `DELETE /api/checks/{uuid}` | Admin | Job lesen (Formularwerte) · ändern · löschen |
+| `GET /api/config/export` | Admin | Jobs und Host-Einstellungen als YAML (`checks.yaml`-Format) |
+| `POST /api/config/import` | Admin | `{"yaml": "...", "dry": true}` – Vorschau bzw. anlegen/aktualisieren, löscht nie |
+| `PUT /api/hosts/{name}/settings` · `DELETE /api/hosts/{name}` | Admin | `{"always_on": bool, "links": [{"label","url"}]}` · Host entfernen (Beszel, Updates, Einstellungen) |
+| `GET/POST /api/tokens` · `DELETE /api/tokens/{id}` | alle | eigene API-Tokens (Admins sehen alle) |
 | `GET /api/jobs/help` | Admin | Ping-Adresse, Webhook-Adresse, Token, bekannte Hosts (für Anleitungen) |
 | `POST /api/checks/{uuid}/pause\|resume` | Admin | Check pausieren/fortsetzen |
 | `POST /api/checks/{uuid}/prio` | Admin | `{"prio":"kritisch\|normal\|info"}` |
