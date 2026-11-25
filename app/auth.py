@@ -3,6 +3,7 @@
 - Erster Start ohne Benutzer: Einrichtungscode im Log (docker compose logs status). Wer ihn kennt, legt den Admin an.
 - Passwörter: scrypt (hashlib, ohne Zusatzpakete). Sitzungen: zufälliges Token im Cookie, in der DB nur als SHA-256.
 - Rollen: admin (alles), viewer (nur lesen, eigenes Passwort, eigene Push-Geräte).
+- API-Tokens für eigene Skripte (`qb_…`): gehören einem Benutzer, haben dessen Rolle, in der DB nur als SHA-256.
 """
 
 from __future__ import annotations
@@ -84,6 +85,9 @@ class Store:
                     token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     created REAL NOT NULL, expires REAL NOT NULL, ua TEXT NOT NULL DEFAULT '');
                 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS api_tokens (
+                    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, name TEXT NOT NULL, token_hash TEXT UNIQUE NOT NULL,
+                    hint TEXT NOT NULL, created REAL NOT NULL, last_used REAL);
                 """
             )
         try:
@@ -161,6 +165,7 @@ class Store:
         if user["role"] == "admin" and self._q("SELECT COUNT(*) c FROM users WHERE role='admin'")[0]["c"] <= 1:
             raise AuthError("Der letzte Admin kann nicht gelöscht werden")
         self._x("DELETE FROM sessions WHERE user_id=?", (uid,))
+        self._x("DELETE FROM api_tokens WHERE user_id=?", (uid,))
         self._x("DELETE FROM users WHERE id=?", (uid,))
 
     def set_role(self, uid: int, role: str, acting_uid: int) -> dict:
@@ -231,6 +236,51 @@ class Store:
     def end_session(self, token: str | None) -> None:
         if token:
             self._x("DELETE FROM sessions WHERE token_hash=?", (_token_hash(token),))
+
+    # ------------------------------------------------------------ API-Tokens
+    def create_api_token(self, uid: int, name: str) -> tuple[str, dict]:
+        name = (name or "").strip()[:60]
+        if not name:
+            raise AuthError("Bitte einen Namen angeben, z. B. „Backup-Skript nas“")
+        if len(self._q("SELECT id FROM api_tokens WHERE user_id=?", (uid,))) >= 20:
+            raise AuthError("Höchstens 20 Tokens pro Benutzer")
+        token = "qb_" + secrets.token_urlsafe(32)
+        tid = self._x(
+            "INSERT INTO api_tokens(user_id, name, token_hash, hint, created) VALUES (?,?,?,?,?)",
+            (uid, name, _token_hash(token), token[:7] + "…" + token[-4:], time.time()),
+        )
+        return token, self.list_api_tokens(uid, tid=tid)[0]
+
+    def list_api_tokens(self, uid: int | None = None, tid: int | None = None) -> list[dict]:
+        sql = "SELECT t.id, t.name, t.hint, t.created, t.last_used, u.email FROM api_tokens t JOIN users u ON u.id = t.user_id"
+        cond, args = [], []
+        if uid is not None:
+            cond.append("t.user_id=?")
+            args.append(uid)
+        if tid is not None:
+            cond.append("t.id=?")
+            args.append(tid)
+        return [dict(r) for r in self._q(sql + (" WHERE " + " AND ".join(cond) if cond else "") + " ORDER BY t.created", tuple(args))]
+
+    def delete_api_token(self, tid: int, uid: int, is_admin: bool) -> None:
+        rows = self._q("SELECT user_id FROM api_tokens WHERE id=?", (tid,))
+        if not rows or (rows[0]["user_id"] != uid and not is_admin):
+            raise AuthError("Token nicht gefunden")
+        self._x("DELETE FROM api_tokens WHERE id=?", (tid,))
+
+    def token_user(self, token: str | None) -> dict | None:
+        if not token or not token.startswith("qb_"):
+            return None
+        rows = self._q(
+            "SELECT t.id tid, u.id, u.email, u.name, u.role FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash=?",
+            (_token_hash(token),),
+        )
+        if not rows:
+            return None
+        self._x("UPDATE api_tokens SET last_used=? WHERE id=?", (time.time(), rows[0]["tid"]))
+        user = dict(rows[0])
+        user.pop("tid")
+        return user | {"via": "token"}
 
     # ------------------------------------------------------------ Einstellungen
     def get_setting(self, key: str, default=None):

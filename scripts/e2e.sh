@@ -116,6 +116,18 @@ expect "Änderung übernommen" sh -c "curl -fsS -b '$JAR' '$S/api/checks/$juuid'
 expect "Job löschen" curl -fsS -o /dev/null "${H[@]}" -X DELETE "$S/api/checks/$juuid"
 expect "Job ist weg" state_ok "not any(c['name']=='pve/backup' for c in d['checks'])"
 
+echo "== API-Token, YAML-Export/-Import, Host-Einstellungen"
+tok=$(curl -fsS "${H[@]}" -d '{"name":"e2e"}' "$S/api/tokens" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+expect "API-Token liest den Zustand" curl -fsS -o /dev/null -H "Authorization: Bearer $tok" "$S/api/state"
+expect "Export enthält die Jobs aus checks.yaml" sh -c "curl -fsS -b '$JAR' '$S/api/config/export' | grep -q 'name: docker01/certbot'"
+expect "Import per API-Token legt neuen Job an" sh -c "curl -fsS -H 'Authorization: Bearer $tok' -H 'Content-Type: application/json' \
+  -d '{\"yaml\":\"checks:\\n  - name: e2e/import\\n    period: 1d\\n    grace: 1h\\n\",\"dry\":false}' '$S/api/config/import' | grep -q anlegen"
+expect "Importierter Job sichtbar" state_ok "any(c['name']=='e2e/import' for c in d['checks'])"
+expect "Host-Einstellung speichern" curl -fsS -o /dev/null "${H[@]}" -X PUT -d '{"always_on":false,"links":[{"label":"Web","url":"https://e2e.example.org"}]}' "$S/api/hosts/e2e-host/settings"
+tid=$(curl -fsS -b "$JAR" "$S/api/tokens" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tokens"][0]["id"])')
+expect "API-Token widerrufen" curl -fsS -o /dev/null "${H[@]}" -X DELETE "$S/api/tokens/$tid"
+expect "Widerrufener Token abgelehnt (401)" test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $tok" "$S/api/state")" = 401
+
 # Mail über Mailpit: Empfänger setzen, Test senden, Morgenmeldung
 expect "Mail-Empfänger speichern" curl -fsS -o /dev/null "${H[@]}" -X PUT -d '{"mail_to":"ops@example.org","digest_time":"06:45"}' "$S/api/settings"
 expect "Test-Mail senden" curl -fsS -o /dev/null "${H[@]}" -d '{"channel":"mail"}' "$S/api/notify/test"

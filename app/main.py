@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import jwt
+import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -686,6 +687,11 @@ async def access_guard(request: Request, call_next):
         request.state.user = {"id": 0, "email": "ohne-anmeldung", "name": "", "role": "admin", "via": "none"}
         return await call_next(request)
     user = _access_user(request)
+    bearer = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    if user is None and bearer.startswith("qb_"):
+        user = STORE.token_user(bearer)  # API-Token: kein Cookie, daher keine CSRF-Prüfung nötig
+        if user is None:
+            return JSONResponse({"detail": "API-Token ungültig oder widerrufen"}, status_code=401)
     if user is None:
         user = STORE.session_user(request.cookies.get(SESSION_COOKIE))
         if user and request.method in UNSAFE and not _same_origin(request):
@@ -750,17 +756,25 @@ async def healthz():
 _PRIV = re.compile(r"^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.)|\.(lokal|local|lan|fritz\.box|home\.arpa)$|\.lokal\.|^[^.]+$")
 
 
-def host_extra(beszel_name: str) -> dict:
-    """always_on und Weblinks aus checks.yaml (hosts.<name>.url: str oder {Label: URL})."""
+def host_settings() -> dict:
+    """In der Oberfläche gesetzte Host-Einstellungen {name: {always_on, links: [{label, url}]}}."""
+    return STORE.get_setting("hosts", {}) or {}
+
+
+def host_extra(beszel_name: str, gui: dict | None = None) -> dict:
+    """always_on und Weblinks: Oberfläche (settings.hosts) vor checks.yaml (hosts.<name>.url: str oder {Label: URL})."""
     conf = next((v for v in (cfg.get("hosts") or {}).values() if v.get("beszel") == beszel_name), {})
+    g = (host_settings() if gui is None else gui).get(beszel_name, {})
     url = conf.get("url") or {}
     if isinstance(url, str):
         url = {"Weboberfläche": url}
+    if "links" in g:
+        url = {li["label"]: li["url"] for li in g["links"]}
     links = []
     for label, u in url.items():
         hostpart = re.sub(r"^\w+://", "", str(u)).split("/")[0].split(":")[0]
         links.append({"label": str(label), "url": str(u), "vpn": bool(_PRIV.search(hostpart))})
-    return {"always_on": conf.get("always_on", True), "links": links}
+    return {"always_on": g.get("always_on", conf.get("always_on", True)), "links": links, "custom": bool(g)}
 
 
 @app.get("/api/state")
@@ -770,12 +784,13 @@ async def api_state(fresh: int = 0):
         async with _refresh_lock:
             if time.monotonic() - _last_refresh >= 10:
                 await refresh()
+    hs = host_settings()
     return {
         "generated": state["generated"],
         "summary": summary(),
         "attention": attention(),
         "checks": state["checks"],
-        "hosts": [{**h, **host_extra(h["name"])} for h in state["hosts"]],
+        "hosts": [{**h, **host_extra(h["name"], hs)} for h in state["hosts"]],
         "pbs": state["pbs"],
         "updates": sorted(updates.values(), key=lambda u: (u["kind"], u["host"])),
         "host_updates": host_updates(),
@@ -1185,6 +1200,41 @@ def _settings() -> dict:
     }
 
 
+@app.get("/api/tokens")
+async def tokens_list(request: Request):
+    user = request.state.user
+    if user.get("via") in ("none", "access") or not user.get("id"):
+        return {"tokens": [], "available": False}
+    mine = STORE.list_api_tokens(user["id"])
+    others = [t for t in STORE.list_api_tokens() if t["id"] not in {m["id"] for m in mine}] if user["role"] == "admin" else []
+    return {"tokens": mine, "others": others, "available": True}
+
+
+@app.post("/api/tokens")
+async def tokens_create(request: Request):
+    user = request.state.user
+    if user.get("via") == "token":
+        raise HTTPException(403, "Tokens nur in der Oberfläche anlegen")
+    if not user.get("id"):
+        raise HTTPException(400, "API-Tokens gibt es nur mit lokalen Konten")
+    try:
+        token, info = STORE.create_api_token(user["id"], (await _body(request)).get("name", ""))
+    except auth.AuthError as exc:
+        raise HTTPException(400, str(exc)) from None
+    log.info("API-Token angelegt: %s (%s)", info["name"], user["email"])
+    return {"token": token, "info": info}
+
+
+@app.delete("/api/tokens/{tid}")
+async def tokens_delete(tid: int, request: Request):
+    user = request.state.user
+    try:
+        STORE.delete_api_token(tid, user.get("id", 0), user.get("role") == "admin")
+    except auth.AuthError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return {"ok": True}
+
+
 @app.get("/api/settings")
 async def settings_get():
     return _settings()
@@ -1246,6 +1296,55 @@ async def system_info():
         "auth": "access" if _jwk else ("none" if ALLOW_NO_AUTH else "local"),
         "users": len(STORE.list_users()),
     }
+
+
+_URL = re.compile(r"https?://[^\s\"'<>]{1,300}")
+
+
+@app.put("/api/hosts/{name}/settings")
+async def host_settings_put(name: str, request: Request):
+    """Host-Einstellungen aus der Oberfläche: {always_on: bool, links: [{label, url}]}."""
+    require_admin(request)
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name):
+        raise HTTPException(400, "Ungültiger Hostname")
+    b = await _body(request)
+    links = []
+    for li in (b.get("links") or [])[:10]:
+        label, url = str(li.get("label", "")).strip()[:40], str(li.get("url", "")).strip()
+        if not url:
+            continue
+        if not _URL.fullmatch(url):
+            raise HTTPException(400, f"Link muss mit http:// oder https:// beginnen: {url[:60]}")
+        links.append({"label": label or "Weboberfläche", "url": url})
+    hs = host_settings()
+    hs[name] = {"always_on": bool(b.get("always_on", True)), "links": links}
+    STORE.set_setting("hosts", hs)
+    return {"ok": True, "host": host_extra(name)}
+
+
+@app.delete("/api/hosts/{name}")
+async def host_delete(name: str, request: Request):
+    """Host vergessen: aus Beszel entfernen, Update-Berichte und Einstellungen löschen. Agent vorher deinstallieren,
+    sonst meldet er sich mit dem Universal-Token gleich wieder an."""
+    require_admin(request)
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name):
+        raise HTTPException(400, "Ungültiger Hostname")
+    removed = False
+    if not DEMO:
+        try:
+            removed = await bootstrap.delete_beszel_system(BESZEL_URL, E("ADMIN_EMAIL", ""), E("ADMIN_PASSWORD", ""), name)
+        except Exception as exc:
+            raise HTTPException(502, f"Beszel: {type(exc).__name__}") from None
+    for key in [k for k, u in updates.items() if u["host"] == name]:
+        updates.pop(key)
+    _save("updates.json", updates)
+    if flags.pop(name, None) is not None:
+        _save("flags.json", flags)
+    hs = host_settings()
+    if hs.pop(name, None) is not None:
+        STORE.set_setting("hosts", hs)
+    await refresh()
+    return {"ok": True, "beszel": removed}
 
 
 @app.get("/api/hosts/install-command")
@@ -1375,6 +1474,94 @@ async def check_delete(uuid: str, request: Request):
         raise _hc_error(exc) from None
     await refresh()
     return {"ok": True}
+
+
+@app.get("/api/config/export")
+async def config_export(request: Request):
+    """Jobs und Host-Einstellungen als checks.yaml-Datei (Import: System → Konfiguration oder hc_sync)."""
+    require_admin(request)
+    tz = _tz()
+    try:
+        checks = (await _hc("GET", "/api/v3/checks/")).json()["checks"] if CREDS.hc_api_key else []
+    except httpx.HTTPError as exc:
+        raise _hc_error(exc) from None
+    hs = host_settings()
+    hosts = {}
+    for name in sorted({h["name"] for h in state["hosts"]} | set(hs)):
+        x = host_extra(name, hs)
+        if x["custom"] or not x["always_on"] or x["links"]:
+            hosts[name] = {"beszel": name, "always_on": x["always_on"]} | (
+                {"url": {li["label"]: li["url"] for li in x["links"]}} if x["links"] else {}
+            )
+    doc = {
+        "settings": {"tz": tz} | ({"channels": cfg["settings"]["channels"]} if (cfg.get("settings") or {}).get("channels") else {}),
+        "hosts": hosts,
+        "checks": [jobs_mod.to_yaml_check(c, tz) for c in sorted(checks, key=lambda c: c["name"])],
+    }
+    head = (
+        f"# QuietBoard – Jobs und Hosts, exportiert {now().strftime('%d.%m.%Y %H:%M')}\n"
+        "# Import: System → Konfiguration (legt an und aktualisiert, löscht nie)\n"
+    )
+    text = head + yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=140)
+    return Response(text, media_type="application/yaml", headers={"Content-Disposition": 'attachment; filename="quietboard-config.yaml"'})
+
+
+@app.post("/api/config/import")
+async def config_import(request: Request):
+    """Body: {"yaml": "...", "dry": true|false}. Legt Jobs an/aktualisiert sie und übernimmt Host-Einstellungen – löscht nie."""
+    require_admin(request)
+    b = await _body(request)
+    try:
+        doc = yaml.safe_load(str(b.get("yaml", ""))[:500_000]) or {}
+    except yaml.YAMLError as exc:
+        raise HTTPException(400, f"YAML fehlerhaft: {str(exc).splitlines()[0]}") from None
+    if not isinstance(doc, dict) or not isinstance(doc.get("checks", []), list) or not isinstance(doc.get("hosts", {}), dict):
+        raise HTTPException(400, "Erwartet: settings, hosts, checks wie in checks.yaml")
+    dry = bool(b.get("dry", True))
+    tz = (doc.get("settings") or {}).get("tz") or _tz()
+    if doc.get("checks") and not CREDS.hc_api_key:
+        raise HTTPException(503, "Healthchecks ist noch nicht eingerichtet")
+    try:
+        existing = {c["name"]: c for c in (await _hc("GET", "/api/v3/checks/")).json()["checks"]} if doc.get("checks") else {}
+    except httpx.HTTPError as exc:
+        raise _hc_error(exc) from None
+    actions = []
+    for c in doc.get("checks") or []:
+        try:
+            body, prio = jobs_mod.from_yaml_check(c, tz)
+        except jobs_mod.JobError as exc:
+            label = str(c.get("name", "?")) if isinstance(c, dict) else "?"
+            actions.append({"name": label, "action": "Fehler", "detail": str(exc)})
+            continue
+        cur = existing.get(body["name"])
+        act = {"name": body["name"], "action": "aktualisieren" if cur else "anlegen"}
+        if not dry:
+            try:
+                body["channels"] = await _channel_ids(prio)
+                if cur:
+                    body.pop("slug", None)
+                    await _hc("POST", f"/api/v3/checks/{cur.get('uuid') or cur.get('unique_key')}", json=body)
+                else:
+                    await _hc("POST", "/api/v3/checks/", json=body)
+            except httpx.HTTPError as exc:
+                act = {"name": body["name"], "action": "Fehler", "detail": _hc_error(exc).detail}
+        actions.append(act)
+    hosts = []
+    hs = host_settings()
+    for key, h in (doc.get("hosts") or {}).items():
+        h = h or {}
+        name = str(h.get("beszel") or key)
+        url = h.get("url") or {}
+        if isinstance(url, str):
+            url = {"Weboberfläche": url}
+        links = [{"label": str(k)[:40], "url": str(v)} for k, v in url.items() if _URL.fullmatch(str(v))]
+        hosts.append({"name": name, "always_on": bool(h.get("always_on", True)), "links": len(links)})
+        hs[name] = {"always_on": bool(h.get("always_on", True)), "links": links}
+    if not dry:
+        if hosts:
+            STORE.set_setting("hosts", hs)
+        await refresh()
+    return {"dry": dry, "checks": actions, "hosts": hosts}
 
 
 @app.post("/api/checks/{uuid}/{action}")

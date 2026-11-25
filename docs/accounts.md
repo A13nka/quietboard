@@ -23,6 +23,18 @@ Benutzer anlegen unter **System → Benutzer**. Passwörter: mindestens 10 Zeich
 
 Healthchecks und Beszel haben eigene Admin-Zugänge: `ADMIN_EMAIL` und `ADMIN_PASSWORD` aus `.env`.
 
+## API-Tokens für eigene Skripte
+
+Unter **System → API-Tokens** legt jeder Benutzer Tokens für eigene Skripte an (z. B. für Home Assistant oder ein Dashboard). Ein Token hat dieselben Rechte wie das Konto – ein Token eines Betrachters kann also nur lesen.
+
+```bash
+curl -H "Authorization: Bearer qb_…" http://<server>:8088/api/state
+```
+
+Der Token wird nur einmal angezeigt; gespeichert ist nur eine Prüfsumme. Die Liste zeigt, wann ein Token zuletzt benutzt wurde. *Widerrufen* sperrt ihn sofort. Admins sehen und widerrufen auch die Tokens anderer Benutzer. Wird ein Benutzer gelöscht, gelten seine Tokens nicht mehr.
+
+Nicht zu verwechseln mit dem Zugangsschlüssel für Hosts (`INGEST_TOKEN`), mit dem Hosts ihre Berichte schicken.
+
 ## Passwort vergessen, Admin ausgesperrt
 
 Die Notfall-CLI im Container hilft:

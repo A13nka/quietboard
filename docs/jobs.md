@@ -49,6 +49,15 @@ Das Log eines fehlgeschlagenen Laufs steht in der App direkt in der aufgeklappte
 | Backrest | Vorlage „Andere Software mit Ping-URL“ → *Plan → Hooks → Healthchecks*, Adresse aus der Anleitung |
 | Synology, Watchtower, DockHand, beliebige Skripte | Meldungen ohne festen Zeitplan: `POST /api/ingest/notify` mit Token → [API](reference/api.md) |
 
+## Sichern und übertragen (YAML)
+
+Unter **System → Konfiguration (YAML)**:
+
+- **Exportieren** lädt alle Jobs und Host-Einstellungen als `quietboard-config.yaml` herunter – im selben Format wie `checks.yaml`.
+- **Importieren:** Datei wählen oder Text einfügen → *Vorschau* zeigt, was angelegt oder aktualisiert wird, und meldet fehlerhafte Einträge → *Übernehmen*. Der Import löscht nie etwas.
+
+So lässt sich ein Stand sichern, auf einen neuen Server übertragen oder in Git versionieren.
+
 ## Alternative: Checks als Code (`checks.yaml`)
 
 Wer Jobs lieber in einer Datei pflegt (z. B. in Git), kann sie in `~/quietboard/config/checks.yaml` beschreiben (Vorlage: `checks.example.yaml` daneben) und abgleichen:

@@ -65,6 +65,16 @@ So funktioniert es auch auf UGREEN (UGOS), QNAP (Container Station), TrueNAS SCA
 - [Proxmox VE und Backup Server](proxmox.md) – Backups, Sync, Verify, GC und Prune als Jobs
 - [Synology](synology.md) – Agent als Binary oder Container, DSM-Updates, NAS mit Zeitfenster
 
+## Einstellungen je Host
+
+In der App unter *Hosts* einen Host aufklappen → *Einstellungen* (nur Admins):
+
+- **Läuft dauerhaft:** ausschalten für Rechner, die nur zeitweise an sind (z. B. ein NAS, das nachts läuft). Sie gelten dann nicht als ausgefallen, die Morgenmeldung nennt nur, wann sie zuletzt gesehen wurden.
+- **Weblinks:** eine Zeile pro Link, `Name = Adresse` (z. B. `Portainer = https://docker01.home.arpa:9443`). Die Links stehen in der aufgeklappten Zeile; Adressen im eigenen Netz sind mit „(VPN)“ markiert.
+
+Die Einstellungen aus der Oberfläche haben Vorrang vor `hosts:` in `checks.yaml`.
+
 ## Host entfernen
 
-Auf dem Host [deinstallieren](../install/backup.md#deinstallation), in Beszel das System löschen.
+1. Auf dem Host [deinstallieren](../install/backup.md#deinstallation) – sonst meldet sich der Agent gleich wieder an.
+2. In der App: Host aufklappen → *Einstellungen* → **Host entfernen**. Das löscht ihn in Beszel samt Verlauf, seine Update-Berichte und Einstellungen. Jobs des Hosts bleiben und lassen sich unter *Jobs* einzeln löschen.

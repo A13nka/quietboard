@@ -156,3 +156,51 @@ def test_cli_add_and_reset(tmp_path, monkeypatch, capsys):
     assert pw1 != pw2
     assert store.login("a@example.org", pw2, "x")["role"] == "admin"
     assert cli.main(["users"]) == 0 and "a@example.org" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------ API-Tokens
+def test_api_token_lifecycle(client, store):
+    setup_admin(client, store)
+    origin = {"Origin": "http://qb.test"}
+    r = client.post("/api/tokens", json={"name": "Skript"}, headers=origin)
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+    assert token.startswith("qb_") and token not in str(store.list_api_tokens())  # nur der Hash liegt in der DB
+    bare = TestClient(main.app, base_url="http://qb.test")  # ohne Cookie
+    auth_h = {"Authorization": f"Bearer {token}"}
+    assert bare.get("/api/state", headers=auth_h).status_code == 200
+    assert bare.post("/api/tokens", json={"name": "x"}, headers=auth_h).status_code == 403  # Token legt keine Tokens an
+    assert bare.get("/api/state", headers={"Authorization": "Bearer qb_falsch"}).status_code == 401
+    tid = client.get("/api/tokens").json()["tokens"][0]["id"]
+    assert client.delete(f"/api/tokens/{tid}", headers=origin).status_code == 200
+    assert bare.get("/api/state", headers=auth_h).status_code == 401
+
+
+def test_viewer_token_has_viewer_rights(client, store):
+    setup_admin(client, store)
+    viewer = store.create_user("v@example.org", PW, "viewer")
+    token, _ = store.create_api_token(viewer["id"], "nur lesen")
+    bare = TestClient(main.app, base_url="http://qb.test")
+    h = {"Authorization": f"Bearer {token}"}
+    assert bare.get("/api/state", headers=h).status_code == 200
+    assert bare.get("/api/hosts/install-command", headers=h).status_code == 403
+    store.delete_user(viewer["id"], acting_uid=1)
+    assert bare.get("/api/state", headers=h).status_code == 401  # Tokens gelöschter Benutzer gelten nicht mehr
+
+
+def test_host_settings_override_and_validation(client, store):
+    setup_admin(client, store)
+    origin = {"Origin": "http://qb.test"}
+    r = client.put(
+        "/api/hosts/nas/settings", json={"always_on": False, "links": [{"label": "x", "url": "javascript:alert(1)"}]}, headers=origin
+    )
+    assert r.status_code == 400
+    r = client.put(
+        "/api/hosts/nas/settings", json={"always_on": False, "links": [{"label": "NAS", "url": "https://nas.home.arpa"}]}, headers=origin
+    )
+    assert r.status_code == 200
+    assert main.host_extra("nas") == {
+        "always_on": False,
+        "links": [{"label": "NAS", "url": "https://nas.home.arpa", "vpn": True}],
+        "custom": True,
+    }
