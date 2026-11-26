@@ -14,14 +14,14 @@ rm -rf dist && mkdir -p "dist/$name/config" "dist/$name/hosts"
 cp compose.yaml .env.example generate-env.sh install.sh LICENSE THIRD_PARTY_NOTICES.md CHANGELOG.md README.md "dist/$name/"
 cp config/checks.example.yaml "dist/$name/config/"
 cp hosts/hc hosts/hc.conf.example hosts/updates-report hosts/updates-report.service hosts/updates-report.timer \
-  hosts/unattended-security.sh hosts/install-host.sh hosts/synology-setup.sh hosts/dsm-report hosts/beszel-agent.compose.yml "dist/$name/hosts/"
+  hosts/unattended-security.sh hosts/install-host.sh hosts/upgrade-host.sh hosts/synology-setup.sh hosts/dsm-report hosts/beszel-agent.compose.yml "dist/$name/hosts/"
 
 # Auf diese Version festlegen: Image-Tag in compose.yaml, Version und Download-Quelle in install.sh
 sed -i.bak "s#\${QB_VERSION:-latest}#\${QB_VERSION:-$v}#" "dist/$name/compose.yaml"
-sed -i.bak "s#^QB_VERSION=\${QB_VERSION:-}#QB_VERSION=\${QB_VERSION:-$v}#" "dist/$name/install.sh"
+sed -i.bak "s#^QB_RELEASE=\"\"#QB_RELEASE=$v#" "dist/$name/install.sh"
 rm -f "dist/$name"/*.bak
 grep -q "quietboard:\${QB_VERSION:-$v}" "dist/$name/compose.yaml" || { echo "compose.yaml: Version nicht eingetragen" >&2; exit 1; }
-grep -q "^QB_VERSION=\${QB_VERSION:-$v}" "dist/$name/install.sh" || { echo "install.sh: Version nicht eingetragen" >&2; exit 1; }
+grep -q "^QB_RELEASE=$v " "dist/$name/install.sh" || { echo "install.sh: Version nicht eingetragen" >&2; exit 1; }
 chmod +x "dist/$name/install.sh" "dist/$name/generate-env.sh" "dist/$name/hosts/hc" "dist/$name/hosts/updates-report" "dist/$name/hosts/dsm-report" "dist/$name"/hosts/*.sh
 
 # Reproduzierbares Archiv: feste Reihenfolge, Zeitstempel, Besitzer

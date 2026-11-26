@@ -22,6 +22,32 @@ If you publish anything, publish only **port 8088** (the app). Healthchecks (800
 
 `BIND_ADDR` in `.env` sets the address the ports listen on (default: all). The addresses under which hosts reach the server are `HC_PUBLIC_URL`, `HC_PING_ENDPOINT` and `BESZEL_PUBLIC_URL`; `install.sh` sets them to the server's first IP. After a change: `docker compose up -d`.
 
+## Docker bypasses the firewall (ufw)
+
+Docker writes its port mappings straight into iptables – **before** the rules of ufw or firewalld. A `ufw deny 8000`
+therefore has no effect on container ports. On a server with a public address, either:
+
+- set `BIND_ADDR` to the LAN or VPN address (the ports then only listen there), **or**
+- block in the `DOCKER-USER` chain, which Docker places before its own rules:
+
+  ```bash
+  # drop everything from the public interface to the container ports (adjust eth0)
+  sudo iptables -I DOCKER-USER -i eth0 -p tcp -m multiport --dports 8000,8080,8090 -j DROP
+  sudo iptables -I DOCKER-USER -i eth0 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+  ```
+
+  What counts are the ports **inside the container** (8080 for the app, not 8088). To keep the rules across reboots:
+  `iptables-persistent` (`netfilter-persistent save`) or a systemd unit of your own.
+
+`install.sh` warns if the server has a public address and `BIND_ADDR` is not set.
+
+## Host command only over trusted paths
+
+The command from **Add host** downloads a script with credentials (ping key, ingest token, agent token). Over `http://`
+this is only fine inside your own LAN or through a VPN. Anyone who can read or redirect the traffic would otherwise get
+the credentials – or hand the host a different script that runs as root. Over the internet, therefore, only via HTTPS
+(reverse proxy, tunnel) or a VPN.
+
 ## Option 1: everything in the same LAN
 
 Nothing else to do. Do not forward the ports to the internet. For Web Push on the phone you only need HTTPS (see below).

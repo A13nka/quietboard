@@ -41,6 +41,18 @@ The short name (slug) is the job name with `-` instead of `/`. In cron: `0 3 * *
 
 The log of a failed run is shown right in the expanded row in the app.
 
+`hc run` always runs the command – even if Healthchecks is unreachable or the configuration is not readable (then only
+with a warning). **Jobs without root:** `/etc/hc.conf` is readable by root only, because it also holds the ingest
+token. For other users, create a file with just the ping data:
+
+```bash
+sudo sh -c 'grep -E "^HC_PING_(BASE|KEY)=" /etc/hc.conf > /etc/hc-ping.conf'
+sudo groupadd -f hc && sudo chgrp hc /etc/hc-ping.conf && sudo chmod 640 /etc/hc-ping.conf
+sudo usermod -aG hc <user>
+```
+
+`hc` uses `/etc/hc-ping.conf` when `/etc/hc.conf` is not readable (or explicitly `HC_CONF=/path`).
+
 ## Other senders
 
 | Sender | Way |

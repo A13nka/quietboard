@@ -11,6 +11,7 @@ import asyncio
 import base64
 import contextlib
 import datetime as dt
+import hashlib
 import hmac
 import ipaddress
 import json
@@ -56,8 +57,10 @@ BESZEL_PUBLIC = E("BESZEL_PUBLIC_URL", "").rstrip("/")
 # Zugänge zu den Motoren: Umgebung oder automatische Einrichtung (app/bootstrap.py)
 CREDS = bootstrap.load()
 
-# PBS_TARGETS="pbs1|https://pbs1.example.lan:8007|status@pbs!app|SECRET;pbs2|https://...|...|..."
-PBS_TARGETS = [t.split("|") for t in E("PBS_TARGETS", "").split(";") if t.count("|") == 3]
+# PBS_TARGETS="pbs1|https://pbs1.example.lan:8007|status@pbs!app|SECRET[|prüfung];pbs2|https://...|...|..."
+# prüfung (optional): SHA-256-Fingerprint des Zertifikats (PBS-Dashboard → „Fingerprint anzeigen“),
+# ca:/pfad/zur/ca.pem oder verify (System-CAs). Ohne Angabe wird das Zertifikat nicht geprüft (Warnung im Log).
+PBS_TARGETS = [(t.split("|") + [""])[:5] for t in E("PBS_TARGETS", "").split(";") if t.count("|") in (3, 4)]
 
 SIGNAL_URL = E("SIGNAL_URL", "http://signal-api:8080").rstrip("/")
 SIGNAL_NUMBER = E("SIGNAL_NUMBER", "")
@@ -122,6 +125,7 @@ updates: dict = _load("updates.json", {})  # key "<host>|<kind>" -> Bericht
 events: list = _load("events.json", [])  # neueste zuerst, max 300
 flags: dict = _load("flags.json", {})  # host -> {reboot, checked, sec_alerted}
 SEC_GRACE_H = 48  # Security-Update gilt danach als überfällig
+REPORT_STALE_H = 72  # Update-Bericht eines Hosts gilt danach als veraltet
 digest_state: dict = _load("digest.json", {})
 push_subs: dict = _load("push.json", {})  # endpoint -> Subscription
 push_state: dict = _load("push_state.json", {})  # check-uuid -> letzter gemeldeter Status
@@ -417,13 +421,49 @@ async def fetch_hosts(cli: httpx.AsyncClient) -> list[dict]:
     return out
 
 
-async def fetch_pbs(name: str, url: str, token_id: str, secret: str) -> dict:
-    headers = {"Authorization": f"PBSAPIToken={token_id}:{secret}"}
-    async with httpx.AsyncClient(timeout=10, verify=False, headers=headers) as cli:
-        ds = (await cli.get(f"{url}/api2/json/status/datastore-usage")).raise_for_status().json()["data"]
-        tasks = (
-            (await cli.get(f"{url}/api2/json/nodes/localhost/tasks", params={"running": 1, "limit": 20})).raise_for_status().json()["data"]
-        )
+_pbs_warned: set[str] = set()
+
+
+def _fingerprint(resp: httpx.Response) -> str:
+    """SHA-256 des Server-Zertifikats der Verbindung, über die `resp` kam (Hex, klein, ohne Doppelpunkte)."""
+    stream = resp.extensions.get("network_stream")
+    obj = stream.get_extra_info("ssl_object") if stream else None
+    der = obj.getpeercert(binary_form=True) if obj else None
+    return hashlib.sha256(der).hexdigest() if der else ""
+
+
+def pbs_verify(check: str) -> tuple[bool | str, str]:
+    """(verify-Wert für httpx, erwarteter Fingerprint) aus dem optionalen 5. Feld von PBS_TARGETS."""
+    check = (check or "").strip()
+    if check.lower() == "verify":
+        return True, ""
+    if check.lower().startswith("ca:"):
+        return check[3:], ""
+    fp = check.replace(":", "").lower()
+    if fp and not re.fullmatch(r"[0-9a-f]{64}", fp):
+        raise ValueError("PBS_TARGETS: Prüfung muss ein SHA-256-Fingerprint, ca:/pfad oder verify sein")
+    return False, fp
+
+
+async def fetch_pbs(name: str, url: str, token_id: str, secret: str, check: str = "") -> dict:
+    verify, fp = pbs_verify(check)
+    if verify is False and not fp and name not in _pbs_warned:
+        _pbs_warned.add(name)
+        log.warning("PBS %s: Zertifikat wird nicht geprüft – Fingerprint als 5. Feld in PBS_TARGETS eintragen (Doku: env)", name)
+    async with httpx.AsyncClient(timeout=10, verify=verify) as cli:
+        if fp:
+            # Erst ohne Token prüfen, mit wem wir sprechen; danach jede Antwort (neue Verbindungen möglich)
+            probe = await cli.get(f"{url}/api2/json/version")
+            if _fingerprint(probe) != fp:
+                raise ValueError(f"PBS {name}: Zertifikat passt nicht zum Fingerprint")
+        headers = {"Authorization": f"PBSAPIToken={token_id}:{secret}"}
+        r1 = (await cli.get(f"{url}/api2/json/status/datastore-usage", headers=headers)).raise_for_status()
+        r2 = (
+            await cli.get(f"{url}/api2/json/nodes/localhost/tasks", params={"running": 1, "limit": 20}, headers=headers)
+        ).raise_for_status()
+        if fp and not (_fingerprint(r1) == fp and _fingerprint(r2) == fp):
+            raise ValueError(f"PBS {name}: Zertifikat passt nicht zum Fingerprint")
+        ds, tasks = r1.json()["data"], r2.json()["data"]
     return {
         "online": True,
         "checked": now().isoformat(timespec="seconds"),
@@ -584,10 +624,12 @@ async def _refresh() -> None:
             await check_sec_overdue()
         except Exception:
             log.exception("Push-Auswertung fehlgeschlagen")
-        for name, url, tid, sec in PBS_TARGETS:
+        for name, url, tid, sec, check in PBS_TARGETS:
             try:
-                state["pbs"][name] = await fetch_pbs(name, url, tid, sec)
-            except Exception:
+                state["pbs"][name] = await fetch_pbs(name, url, tid, sec, check)
+            except Exception as exc:
+                if isinstance(exc, ValueError):
+                    log.warning("%s", exc)
                 prev = state["pbs"].get(name, {})
                 state["pbs"][name] = {**prev, "online": False, "running": []}  # offline: keine "laufenden" Tasks anzeigen
         watch_cfg = json.dumps(cfg.get("watch_images"), sort_keys=True)
@@ -727,6 +769,25 @@ def host_updates() -> list[dict]:
     return sorted(hosts.values(), key=lambda h: (-h["sec_overdue"], -h["security"], -int(h["reboot"]), -h["packages"], h["host"]))
 
 
+def report_problems() -> dict[str, str]:
+    """Hosts, deren Update-Bericht fehlschlug oder seit REPORT_STALE_H nicht kam (nur dauerhaft laufende, bekannte Hosts)."""
+    out = {}
+    known = {h["name"] for h in state["hosts"] if host_extra(h["name"])["always_on"]}
+    limit = now() - dt.timedelta(hours=REPORT_STALE_H)
+    for name, f in flags.items():
+        if f.get("report_error"):
+            out[name] = tr("Fehler beim Prüfen: {msg}", msg=f["report_error"]["msg"])
+            continue
+        last = max(f.get("reported") or "", f.get("checked") or "")
+        if name in known and last:
+            try:
+                if dt.datetime.fromisoformat(last) < limit:
+                    out[name] = tr("veraltet, letzter Bericht {t}", t=last[:16].replace("T", " "))
+            except ValueError:
+                pass
+    return out
+
+
 async def check_sec_overdue() -> None:
     """Einmalige Meldung, wenn Security-Updates länger als SEC_GRACE_H offen sind (Automatik hat nicht gegriffen)."""
     overdue = {h["host"]: h for h in host_updates() if h["sec_overdue"]}
@@ -780,6 +841,8 @@ def attention() -> list[dict]:
                     "detail": tr("seit über {h} h offen: {pkgs}", h=SEC_GRACE_H, pkgs=", ".join(h["sec_overdue_pkgs"][:3])),
                 }
             )
+    for name, msg in report_problems().items():
+        items.append({"level": "warn", "kind": "update", "title": tr("{host} · Update-Bericht", host=name), "detail": msg})
     cutoff = (now() - dt.timedelta(hours=24)).isoformat()
     for ev in events:
         if ev["ts"] < cutoff:
@@ -1159,13 +1222,14 @@ async def install_host_script(request: Request):
         lines += [f"base64 -d > \"$QB_FILES/{name}\" <<'QB_EOF'", *(data[i : i + 76] for i in range(0, len(data), 76)), "QB_EOF"]
     lines += [
         'chmod +x "$QB_FILES"/*',
-        "# Als root direkt; sonst Rechte per sudo holen (QB_*-Werte ausdrücklich mitgeben, sudo setzt die Umgebung zurück)",
+        "# Als root direkt; sonst Rechte per sudo holen (QB_*-Werte als Datei mitgeben, sudo setzt die Umgebung zurück)",
         'if [ "$(id -u)" = 0 ]; then',
         '  bash "$QB_FILES/install-host.sh"',
         "else",
         '  command -v sudo >/dev/null || { echo "QuietBoard: bitte als root ausführen (sudo fehlt)" >&2; exit 1; }',
-        '  qb_env=(); for v in ${!QB_@}; do qb_env+=("$v=${!v}"); done',
-        '  sudo env "${qb_env[@]}" bash "$QB_FILES/install-host.sh"',
+        # Werte als Datei (nur für diesen Benutzer lesbar), nicht als Argumente – sonst in der Prozessliste sichtbar
+        '  (umask 077; for v in ${!QB_@}; do printf "%s=%q\\n" "$v" "${!v}"; done > "$QB_FILES/qb.env")',
+        '  sudo bash "$QB_FILES/install-host.sh" --env "$QB_FILES/qb.env"',
         "fi",
         "",
     ]
@@ -1212,10 +1276,19 @@ async def ingest_updates(request: Request):
     """Body: {host, kind: apt|dsm|docker|scanner|mailcow, items: [{pkg, from, to, security}], reboot?: bool}"""
     require_token(request)
     b = await request.json()
-    host, kind = str(b["host"]), str(b.get("kind", "apt"))
+    host, kind = str(b["host"])[:80], str(b.get("kind", "apt"))[:20]
     key = f"{host}|{kind}"
-    prev = {i["pkg"]: i.get("since") for i in updates.get(key, {}).get("items", [])}
     ts = now().isoformat(timespec="seconds")
+    f = flags.setdefault(host, {})
+    if b.get("error"):
+        # Host konnte den Stand nicht ermitteln (z. B. apt kaputt): letzten Bericht behalten, Fehler anzeigen
+        f["report_error"] = {"kind": kind, "msg": str(b["error"])[:200], "ts": ts}
+        _save("flags.json", flags)
+        return {"ok": True, "count": None}
+    if (f.get("report_error") or {}).get("kind") == kind:
+        f.pop("report_error")
+    f["reported"] = ts
+    prev = {i["pkg"]: i.get("since") for i in updates.get(key, {}).get("items", [])}
     items = []
     for i in (b.get("items") or [])[:500]:
         it = {
@@ -1232,8 +1305,8 @@ async def ingest_updates(request: Request):
         updates.pop(key, None)
     _save("updates.json", updates)
     if "reboot" in b:
-        flags.setdefault(host, {}).update({"reboot": bool(b["reboot"]), "checked": ts})
-        _save("flags.json", flags)
+        f.update({"reboot": bool(b["reboot"]), "checked": ts})
+    _save("flags.json", flags)
     if not DEMO and host not in {h["name"] for h in state["hosts"]}:
         # Neuer Host (erster Bericht direkt nach der Installation): gleich nachsehen, ob sein Agent schon da ist
         refresh_soon(5)

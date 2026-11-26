@@ -17,23 +17,36 @@ If the data lives in folders instead of volumes, it is simpler – see [Data in 
 ```bash
 cd ~/quietboard
 docker compose stop
-mkdir -p backup
-for v in status-data healthchecks-data beszel-data bootstrap signal-data; do
-  docker run --rm -v quietboard_$v:/v -v "$PWD/backup":/b alpine tar czf /b/$v.tgz -C /v . 2>/dev/null || true
-done
-cp .env config/checks.yaml backup/
+( set -e   # stops at the first error – then delete nothing and check the output
+  mkdir -p backup
+  for v in status-data healthchecks-data beszel-data bootstrap signal-data; do
+    docker volume inspect quietboard_$v >/dev/null 2>&1 || continue   # signal-data only with the signal profile
+    docker run --rm -v quietboard_$v:/v:ro -v "$PWD/backup":/b alpine:3.22 tar czf /b/$v.tgz -C /v .
+    docker run --rm -v "$PWD/backup":/b:ro alpine:3.22 tar tzf /b/$v.tgz >/dev/null   # archive readable?
+  done
+  cp .env config/checks.yaml backup/
+  if [ -f compose.override.yaml ]; then cp compose.override.yaml backup/; fi
+  echo "backup complete"
+)
 docker compose start
 ```
+
+The backup is only usable once "backup complete" appears. Delete older backups only after the new one has arrived
+off-site and been checked.
 
 `backup/` then contains secrets – only store it off-site encrypted (e.g. restic, Borg, Backrest).
 
 ## Restore / move to a new server
 
 1. Run `install.sh` once on the new server (creates folders and volumes), then `docker compose down`.
-2. Copy back `.env` and `checks.yaml`, restore the volumes:
+2. Copy back `.env`, `checks.yaml` and – if present – `compose.override.yaml`, restore the volumes. Each archive is
+   checked first, only then the volume is emptied:
    ```bash
    for v in status-data healthchecks-data beszel-data bootstrap signal-data; do
-     [ -f backup/$v.tgz ] && docker run --rm -v quietboard_$v:/v -v "$PWD/backup":/b alpine sh -c "rm -rf /v/* && tar xzf /b/$v.tgz -C /v"
+     [ -f backup/$v.tgz ] || continue
+     docker run --rm -v quietboard_$v:/v -v "$PWD/backup":/b:ro alpine:3.22 \
+       sh -c "tar tzf /b/$v.tgz >/dev/null && find /v -mindepth 1 -delete && tar xzf /b/$v.tgz -C /v" \
+       || { echo "error with $v – stopped"; break; }
    done
    docker compose up -d
    ```

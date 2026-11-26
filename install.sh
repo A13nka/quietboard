@@ -7,22 +7,40 @@
 # zeigt danach den Befehl, mit dem jeder weitere Host angebunden wird. Erneut ausführen = aktualisieren
 # (vorhandene .env und Daten bleiben erhalten).
 #
-# Optional per Umgebung: QB_VERSION (z. B. v0.1.0; Standard: neueste stabile Version = latest),
+# Optional per Umgebung: QB_VERSION (Image-Tag, z. B. v0.6.1, v0 oder latest; Standard: neueste Release-Version),
 # PUBLIC_HOST (Adresse, unter der Hosts diesen Server erreichen; Standard: erste IP),
 # TZ, SITE_NAME, STATUS_IMAGE, BIND_ADDR, QB_DIR, QB_BASE_URL (Quelle der Dateien),
 # QB_DATA_DIR (z. B. /srv/quietboard: Daten in Ordnern statt Docker-Volumes – nur bei der Erstinstallation).
-# Aus einem Release geladen (…/releases/download/vX.Y.Z/install.sh) ist QB_VERSION bereits fest eingetragen.
+# Aus einem Release geladen (…/releases/download/vX.Y.Z/install.sh) ist die Version bereits fest eingetragen.
 set -euo pipefail
 QB_DIR=${QB_DIR:-$HOME/quietboard}
-QB_VERSION=${QB_VERSION:-}   # make-dist trägt hier die Release-Version ein
-export QB_VERSION
-# Dateien passend zur Version: Tag-Stand für Releases, sonst main
-QB_BASE_URL=${QB_BASE_URL:-https://raw.githubusercontent.com/A13nka/quietboard/${QB_VERSION:-main}}
+QB_RELEASE=""   # make-dist trägt hier die Release-Version ein (vX.Y.Z)
 # Liegt das Skript in einem Ordner mit den übrigen Dateien (Repo, Test-VM), werden diese genommen.
 src=""
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(dirname "${BASH_SOURCE[0]}")/compose.yaml" ]; then
   src=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 fi
+# Image-Tag (QB_VERSION) und Stand der Dateien (ref) sind getrennt: v0, v0.6 oder latest gibt es nur als Image-Tag.
+want=${QB_VERSION:-}
+if [ -z "$want" ] && [ -f "$QB_DIR/.env" ]; then
+  # Gleitende Tags (v0, v0.6, latest, edge) aus der vorhandenen .env behalten; eine feste Version wird aktualisiert.
+  cur=$(grep -E '^QB_VERSION=' "$QB_DIR/.env" | tail -1 | cut -d= -f2- | sed 's/[[:space:]]*#.*//' || true)
+  case $cur in v[0-9]*.*.*|"") ;; *) want=$cur ;; esac
+fi
+case $want in
+  v[0-9]*.*.*) ref=$want ;;
+  edge) ref=main ;;
+  *) ref=$QB_RELEASE ;;
+esac
+if [ -z "$ref" ] && [ -z "${QB_BASE_URL:-}" ] && [ -z "$src" ]; then
+  # neueste Release-Version: github.com/…/releases/latest leitet auf …/releases/tag/vX.Y.Z weiter
+  ref=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/A13nka/quietboard/releases/latest 2>/dev/null \
+    | sed -n 's#.*/releases/tag/\(v[0-9][^/]*\)$#\1#p' || true)
+  [ -n "$ref" ] || { echo "QuietBoard: neueste Version nicht ermittelbar – mit QB_VERSION=vX.Y.Z erneut aufrufen" >&2; exit 1; }
+fi
+QB_VERSION=${want:-$ref}
+export QB_VERSION
+QB_BASE_URL=${QB_BASE_URL:-https://raw.githubusercontent.com/A13nka/quietboard/${ref:-main}}
 
 # Sprache der Ausgabe: LANGUAGE=de|en, sonst nach der Server-Locale (de_* → Deutsch, sonst Englisch)
 case "${LANGUAGE:-${LC_ALL:-${LANG:-}}}" in de*) QL=de ;; *) QL=en ;; esac
@@ -73,6 +91,16 @@ fi
 
 ./generate-env.sh >/dev/null
 grep -qE '^ADMIN_EMAIL=.+@.+' .env || die "$(m "ADMIN_EMAIL fehlt: erneut aufrufen mit ADMIN_EMAIL=du@example.org" "ADMIN_EMAIL is missing: run again with ADMIN_EMAIL=you@example.org")"
+get() { grep -E "^$1=" .env | head -1 | cut -d= -f2- || true; }   # fehlender Eintrag = leer, kein Abbruch
+# Öffentliche Adresse ohne BIND_ADDR: Die Ports sind dann aus dem Internet erreichbar – Docker umgeht ufw/iptables-INPUT.
+bind=$(get BIND_ADDR)
+if [ -z "$bind" ] || [ "$bind" = 0.0.0.0 ]; then
+  for ip in $(hostname -I 2>/dev/null || true); do
+    case $ip in 10.*|192.168.*|127.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*|100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*|169.254.*|f[cd]*|fe80*|::1) continue ;; esac
+    echo "QuietBoard: $(m "WARNUNG – öffentliche Adresse $ip und kein BIND_ADDR: Die Ports 8088/8000/8090 sind aus dem Internet erreichbar (Docker umgeht ufw). BIND_ADDR=<LAN/VPN-IP> in .env setzen oder Firewall-Regeln in DOCKER-USER – siehe Doku Netzwerk." "WARNING – public address $ip and no BIND_ADDR: ports 8088/8000/8090 are reachable from the internet (Docker bypasses ufw). Set BIND_ADDR=<LAN/VPN IP> in .env or add DOCKER-USER firewall rules – see the network docs.")" >&2
+    break
+  done
+fi
 
 # Images sichtbar laden (beim Update: neue Versionen); lokal gebaute Images (STATUS_IMAGE) dürfen fehlen
 echo "QuietBoard: $(m "lade Images (erstes Mal ~1–3 Minuten):" "pulling images (first time ~1–3 minutes):")"
@@ -82,7 +110,6 @@ echo "QuietBoard: $(m "starte Dienste …" "starting services …")"
 docker compose up -d --remove-orphans >/tmp/quietboard-up.log 2>&1 \
   || { tail -20 /tmp/quietboard-up.log >&2; die "docker compose up $(m "fehlgeschlagen" "failed")"; }
 
-get() { grep -E "^$1=" .env | head -1 | cut -d= -f2- || true; }   # fehlender Eintrag = leer, kein Abbruch
 port=$(get STATUS_PORT); port=${port:-8088}
 for _ in $(seq 1 90); do
   curl -fs -o /dev/null "http://127.0.0.1:$port/healthz" && break

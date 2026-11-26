@@ -35,7 +35,7 @@
 | `VAPID_SUBJECT` | Kontakt für Push-Dienste (`mailto:…`) |
 | `BESZEL_ALERT_DOWN_MIN` | Minuten bis zum Offline-Alarm neuer Hosts (Standard 5) |
 | `POLL_SECONDS` | Abrufintervall der Motoren (Standard 60) |
-| `PBS_TARGETS` | Proxmox-Backup-Server: `name\|url\|tokenid\|secret`, mehrere mit `;` |
+| `PBS_TARGETS` | Proxmox-Backup-Server: `name\|url\|tokenid\|secret[\|prüfung]`, mehrere mit `;`. Prüfung des Zertifikats (empfohlen): SHA-256-Fingerprint aus dem PBS-Dashboard („Fingerprint anzeigen“), `ca:/pfad/ca.pem` oder `verify` (öffentliche CA). Ohne Angabe wird das Zertifikat nicht geprüft (Warnung im Log; ab v0.7 voraussichtlich standardmäßig an) |
 | `SIGNAL_NUMBER`, `SIGNAL_RECIPIENT` | Signal (Profil `signal`) |
 | `TUNNEL_TOKEN` | Cloudflare Tunnel (Profil `tunnel`) |
 | `ACCESS_TEAM`, `ACCESS_AUD` | Cloudflare Access als Anmeldung |

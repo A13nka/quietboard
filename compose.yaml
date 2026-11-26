@@ -105,7 +105,7 @@ services:
         cd /opt/healthchecks &&
         runuser -u hc -- ./manage.py migrate --no-input -v 0 &&
         runuser -u hc -- ./manage.py shell -v 0 < /hc_bootstrap.py &&
-        if [ -s /tmp/hc.json ]; then install -m 600 -o 10001 -g 10001 /tmp/hc.json /bootstrap/healthchecks.json; fi
+        if [ -s /tmp/hc.json ]; then install -m 600 -o 10001 -g 10001 /tmp/hc.json /bootstrap/healthchecks.json; r=$$?; rm -f /tmp/hc.json; exit $$r; fi
     environment:
       <<: [*hc-env, *admin]
       HC_API_KEY: ${HC_API_KEY:-}   # gesetzt = vorhandene Installation übernehmen, nichts ändern
@@ -133,6 +133,8 @@ services:
     mem_limit: 384m
 
   beszel-init:
+    # Setzt den Superuser bei jedem Start auf ADMIN_EMAIL/ADMIN_PASSWORD aus .env (upsert) –
+    # ein in Beszel geändertes Passwort gilt also nur bis zum nächsten Start; ändern in .env.
     image: henrygd/beszel:0.21.2
     restart: "no"
     command: ["superuser", "upsert", "${ADMIN_EMAIL}", "${ADMIN_PASSWORD}", "--dir", "/beszel_data"]
@@ -225,6 +227,18 @@ configs:
       if os.path.exists(TARGET) and project is not None and project.api_key:
           print("healthchecks-init: bereits eingerichtet, keine Änderung")
           sys.exit(0)
+
+      # ADMIN_EMAIL geändert, aber Healthchecks ist schon eingerichtet: kein zweites Konto mit neuen Keys anlegen,
+      # sonst verlöre die App den Zugriff auf die bestehenden Checks.
+      if user is None and Project.objects.exists():
+          print(
+              "healthchecks-init: ABBRUCH – Healthchecks hat schon ein Projekt, aber kein Konto für ADMIN_EMAIL.\n"
+              "  Wurde ADMIN_EMAIL in .env geändert? Den bisherigen Wert wieder eintragen, oder die Mail-Adresse des\n"
+              "  Kontos in Healthchecks (Account Settings) auf ADMIN_EMAIL ändern. Bestehende Installation übernehmen:\n"
+              "  HC_API_KEY und HC_PING_KEY in .env setzen (Doku: Übernahme).",
+              file=sys.stderr,
+          )
+          sys.exit(1)
 
       if user is None:
           user = User(username=str(uuid.uuid4())[:30], email=email)

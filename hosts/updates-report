@@ -16,22 +16,41 @@ post() { # <json>
 }
 
 # ---- apt
-apt-get update -qq -o DPkg::Lock::Timeout=180 >/dev/null 2>&1 || echo "apt-get update fehlgeschlagen" >&2
-items=""
-while IFS= read -r line; do
-  # Beispiel: Inst openssh-server [1:10.0p1-7] (1:10.0p1-7+deb13u2 Debian-Security:13/stable-security [amd64])
-  pkg=$(awk '{print $2}' <<<"$line")
-  old=$(sed -n 's/^Inst [^ ]* \[\([^]]*\)\].*/\1/p' <<<"$line")
-  new=$(sed -n 's/^Inst [^(]*(\([^ ]*\) .*/\1/p' <<<"$line")
-  sec=false; grep -qi 'security' <<<"$line" && sec=true
-  items+="${items:+,}{\"pkg\":\"$pkg\",\"from\":\"$old\",\"to\":\"$new\",\"security\":$sec}"
-done < <(apt-get -s -o Debug::NoLocking=1 dist-upgrade 2>/dev/null | grep '^Inst ')
-# ---- Neustart nötig? (reboot-required oder neuester installierter Kernel läuft noch nicht; LXC ohne /boot → nein)
-reboot=false
-[ -f /var/run/reboot-required ] && reboot=true
-newest=$(find /boot -maxdepth 1 -name 'vmlinuz-*' 2>/dev/null | sed 's|^/boot/vmlinuz-||' | sort -V | tail -1)
-[ -n "$newest" ] && [ "$newest" != "$(uname -r)" ] && reboot=true
-post "{\"host\":\"$HOST\",\"kind\":\"apt\",\"reboot\":$reboot,\"items\":[${items}]}" || echo "Meldung apt fehlgeschlagen" >&2
+# Scheitert apt, wird kein (leerer) Bericht geschickt – sonst sähe der Host fälschlich aktuell aus. Stattdessen
+# meldet der Host den Fehler, die App behält den letzten Stand, und das Skript endet mit Exit 1.
+rc=0
+fail() { # <text>
+  echo "updates-report: $1" >&2
+  local msg; msg=$(printf '%s' "$1" | tr -d '\000-\037'); msg=${msg:0:200}
+  msg=${msg//\\/\\\\}; msg=${msg//\"/\\\"}
+  post "{\"host\":\"$HOST\",\"kind\":\"apt\",\"error\":\"$msg\"}" || echo "Meldung apt fehlgeschlagen" >&2
+  rc=1
+}
+if ! apt-get update -qq -o DPkg::Lock::Timeout=180 >/dev/null 2>&1; then
+  # Ein einzelnes nicht erreichbares Repository lässt apt-get update scheitern, der Rest ist aber aktuell → nur warnen
+  echo "updates-report: apt-get update meldete Fehler, Stand evtl. nicht aktuell" >&2
+fi
+if ! sim=$(apt-get -s -o Debug::NoLocking=1 dist-upgrade 2>&1); then
+  fail "apt-get -s dist-upgrade fehlgeschlagen: $(tail -n1 <<<"$sim")"
+else
+  items=""
+  while IFS= read -r line; do
+    # Beispiel: Inst openssh-server [1:10.0p1-7] (1:10.0p1-7+deb13u2 Debian-Security:13/stable-security [amd64])
+    pkg=$(awk '{print $2}' <<<"$line")
+    old=$(sed -n 's/^Inst [^ ]* \[\([^]]*\)\].*/\1/p' <<<"$line")
+    new=$(sed -n 's/^Inst [^(]*(\([^ ]*\) .*/\1/p' <<<"$line")
+    # Security nur aus dem Quellen-Teil in Klammern, nicht aus dem Paketnamen
+    src=$(sed -n 's/^Inst [^(]*([^ ]* \(.*\))$/\1/p' <<<"$line")
+    sec=false; grep -qi 'security' <<<"$src" && sec=true
+    items+="${items:+,}{\"pkg\":\"$pkg\",\"from\":\"$old\",\"to\":\"$new\",\"security\":$sec}"
+  done < <(grep '^Inst ' <<<"$sim")
+  # ---- Neustart nötig? (reboot-required oder neuester installierter Kernel läuft noch nicht; LXC ohne /boot → nein)
+  reboot=false
+  [ -f /var/run/reboot-required ] && reboot=true
+  newest=$(find /boot -maxdepth 1 -name 'vmlinuz-*' 2>/dev/null | sed 's|^/boot/vmlinuz-||' | sort -V | tail -1)
+  [ -n "$newest" ] && [ "$newest" != "$(uname -r)" ] && reboot=true
+  post "{\"host\":\"$HOST\",\"kind\":\"apt\",\"reboot\":$reboot,\"items\":[${items}]}" || { echo "Meldung apt fehlgeschlagen" >&2; rc=1; }
+fi
 
 # ---- Mailcow-Release (nur wenn MAILCOW_DIR gesetzt)
 # update.sh --check gibt aus, ob neuer Code verfügbar ist. Erkennung über die Ausgabe –
@@ -43,5 +62,6 @@ if [ -n "${MAILCOW_DIR:-}" ] && [ -x "$MAILCOW_DIR/update.sh" ]; then
   else
     mc=""
   fi
-  post "{\"host\":\"$HOST\",\"kind\":\"mailcow\",\"items\":[${mc}]}" || echo "Meldung mailcow fehlgeschlagen" >&2
+  post "{\"host\":\"$HOST\",\"kind\":\"mailcow\",\"items\":[${mc}]}" || { echo "Meldung mailcow fehlgeschlagen" >&2; rc=1; }
 fi
+exit "$rc"

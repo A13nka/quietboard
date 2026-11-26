@@ -5,6 +5,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 umask 077
 [ -f .env ] || { cp .env.example .env; chmod 600 .env; echo ".env angelegt"; }
+# Von Hand bearbeitete .env ohne Zeilenumbruch am Ende: sonst landet der erste angehängte Wert in der letzten Zeile
+if [ -s .env ] && [ -n "$(tail -c1 .env)" ]; then echo >> .env; fi
 
 fill() { # <name> <wert>   – setzt nur, wenn der Eintrag fehlt oder leer ist
   grep -qE "^$1=" .env || { echo "$1=" >> .env; }

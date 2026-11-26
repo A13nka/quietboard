@@ -39,6 +39,18 @@ if os.path.exists(TARGET) and project is not None and project.api_key:
     print("healthchecks-init: bereits eingerichtet, keine Änderung")
     sys.exit(0)
 
+# ADMIN_EMAIL geändert, aber Healthchecks ist schon eingerichtet: kein zweites Konto mit neuen Keys anlegen,
+# sonst verlöre die App den Zugriff auf die bestehenden Checks.
+if user is None and Project.objects.exists():
+    print(
+        "healthchecks-init: ABBRUCH – Healthchecks hat schon ein Projekt, aber kein Konto für ADMIN_EMAIL.\n"
+        "  Wurde ADMIN_EMAIL in .env geändert? Den bisherigen Wert wieder eintragen, oder die Mail-Adresse des\n"
+        "  Kontos in Healthchecks (Account Settings) auf ADMIN_EMAIL ändern. Bestehende Installation übernehmen:\n"
+        "  HC_API_KEY und HC_PING_KEY in .env setzen (Doku: Übernahme).",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 if user is None:
     user = User(username=str(uuid.uuid4())[:30], email=email)
 user.is_staff = True

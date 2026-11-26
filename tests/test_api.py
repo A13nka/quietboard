@@ -41,6 +41,28 @@ def test_ingest_empty_report_clears_host(client):
     assert "web01|apt" not in main.updates
 
 
+def test_ingest_error_keeps_last_report(client):
+    """apt kaputt: letzter Stand bleibt, Fehler steht in „Achtung“; der nächste gute Bericht räumt ihn ab."""
+    client.post("/api/ingest/updates", json={"host": "web01", "items": [{"pkg": "a", "to": "2"}]}, headers=AUTH)
+    r = client.post("/api/ingest/updates", json={"host": "web01", "kind": "apt", "error": "dpkg kaputt"}, headers=AUTH)
+    assert r.status_code == 200
+    assert main.updates["web01|apt"]["items"][0]["pkg"] == "a"
+    assert "dpkg kaputt" in main.report_problems()["web01"]
+    assert any(a["kind"] == "update" and "web01" in a["title"] for a in main.attention())
+    client.post("/api/ingest/updates", json={"host": "web01", "kind": "apt", "reboot": False, "items": []}, headers=AUTH)
+    assert "web01" not in main.report_problems()
+
+
+def test_stale_report_only_for_known_always_on_hosts(client, monkeypatch):
+    old = (main.now() - dt.timedelta(hours=main.REPORT_STALE_H + 1)).isoformat(timespec="seconds")
+    main.flags.update({"web01": {"reported": old}, "weg": {"reported": old}})
+    monkeypatch.setitem(main.state, "hosts", [{"name": "web01", "status": "up"}])
+    probs = main.report_problems()
+    assert "veraltet" in probs["web01"] and "weg" not in probs
+    main.flags["web01"]["reported"] = main.now().isoformat(timespec="seconds")
+    assert main.report_problems() == {}
+
+
 def test_notify_without_signal_does_not_fail(client):
     r = client.post("/api/ingest/notify", json={"title": "Backup fehlgeschlagen", "message": "rc=1"}, headers=AUTH)
     assert r.status_code == 200
@@ -107,23 +129,27 @@ def test_install_script_values_and_override(client, monkeypatch, tmp_path):
 
 
 def test_install_script_uses_sudo_for_normal_users(client, monkeypatch, tmp_path):
-    """Ohne root: Rechte per sudo, alle QB_*-Werte als einzelne Argumente (auch mit Leerzeichen)."""
+    """Ohne root: Rechte per sudo; die QB_*-Werte gehen als Datei mit (nicht in der Prozessliste), auch mit Sonderzeichen."""
     import subprocess
 
     r = _install_script(client, monkeypatch)
     script = r.text.replace('if [ "$(id -u)" = 0 ]; then', "if false; then")
     (tmp_path / "bin").mkdir()
     fake_sudo = tmp_path / "bin" / "sudo"
-    fake_sudo.write_text('#!/bin/sh\nfor a in "$@"; do echo "ARG:$a"; done\n')
+    fake_sudo.write_text(
+        '#!/bin/bash\necho "ARGS:$*"; ls -l "$4" | cut -c1-10; . "$4"\necho "KEY=$QB_AGENT_KEY"; echo "TOK=$QB_AGENT_TOKEN"\n'
+    )
     fake_sudo.chmod(0o755)
     path = tmp_path / "host.sh"
     path.write_text(script)
     out = subprocess.run(["bash", str(path)], capture_output=True, text=True, env={"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin"})
     assert out.returncode == 0, out.stderr
-    assert "ARG:env" in out.stdout
-    assert "ARG:QB_AGENT_KEY=ssh-ed25519 AAAAhub" in out.stdout
-    assert "ARG:QB_AGENT_TOKEN=tok'en$1" in out.stdout
-    assert out.stdout.rstrip().endswith("/install-host.sh")
+    args = next(ln for ln in out.stdout.splitlines() if ln.startswith("ARGS:"))
+    assert args.startswith("ARGS:bash ") and "/install-host.sh --env " in args
+    assert "tok" not in args and "AAAA" not in args
+    assert "-rw-------" in out.stdout
+    assert "KEY=ssh-ed25519 AAAAhub" in out.stdout
+    assert "TOK=tok'en$1" in out.stdout
 
 
 @pytest.mark.parametrize(
