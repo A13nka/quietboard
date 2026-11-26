@@ -2,12 +2,18 @@
 
 import asyncio
 import json
+import re
 import stat
 
 import httpx
 import pytest
 
 from app import bootstrap
+
+
+def _vals(f: str) -> list[str]:
+    """Werte aus einem PocketBase-Filter, egal ob in einfachen oder doppelten Anführungszeichen."""
+    return [a or b for a, b in re.findall(r"'([^']*)'|\"([^\"]*)\"", f)]
 
 
 class FakeBeszel:
@@ -34,7 +40,7 @@ class FakeBeszel:
                 return httpx.Response(200, json={"token": f"user-token-{u['id']}"})
             return httpx.Response(400, json={})
         if path == "/api/collections/users/records" and method == "GET":
-            email = request.url.params["filter"].split("'")[1]
+            email = _vals(request.url.params["filter"])[0]
             return httpx.Response(200, json={"items": [u for u in self.users.values() if u["email"] == email]})
         if path == "/api/collections/users/records" and method == "POST":
             uid = f"u{len(self.users) + 1}"
@@ -45,13 +51,13 @@ class FakeBeszel:
             u.update(password=body["password"], role=body["role"])
             return httpx.Response(200, json=u)
         if path == "/api/collections/universal_tokens/records" and method == "GET":
-            uid = request.url.params["filter"].split("'")[1]
+            uid = _vals(request.url.params["filter"])[0]
             return httpx.Response(200, json={"items": [t for t in self.tokens if t["user"] == uid]})
         if path == "/api/collections/universal_tokens/records" and method == "POST":
             self.tokens.append(body)
             return httpx.Response(200, json=body)
         if path == "/api/collections/user_settings/records" and method == "GET":
-            uid = request.url.params["filter"].split("'")[1]
+            uid = _vals(request.url.params["filter"])[0]
             return httpx.Response(200, json={"items": [v for v in self.settings.values() if v["user"] == uid]})
         if path == "/api/collections/user_settings/records" and method == "POST":
             rid = f"s{len(self.settings) + 1}"
@@ -65,7 +71,7 @@ class FakeBeszel:
             return httpx.Response(200, json=rec)
         if path == "/api/collections/alerts/records" and method == "GET":
             f = request.url.params["filter"]
-            sid, uid = f.split("'")[1], f.split("'")[3]
+            sid, uid = _vals(f)[:2]
             return httpx.Response(200, json={"items": [a for a in self.alerts if a["system"] == sid and a["user"] == uid]})
         if path == "/api/collections/alerts/records" and method == "POST":
             self.alerts.append(body)

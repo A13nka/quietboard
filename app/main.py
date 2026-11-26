@@ -33,7 +33,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, bootstrap, config, i18n, push, security
+from . import alerts, auth, bootstrap, config, i18n, push, security
 from . import jobs as jobs_mod
 from .i18n import tr
 
@@ -86,6 +86,8 @@ SITE_NAME = E("SITE_NAME", "Homelab")
 
 VAPID = push.Vapid(E("VAPID_PRIVATE_KEY"), E("VAPID_SUBJECT", "mailto:admin@example.org")) if E("VAPID_PRIVATE_KEY") else None
 PUSH_PRIOS = ("kritisch", "normal")
+# Adresse der Oberfläche für Links in Signal/Mail (optional; Push öffnet die App ohnehin)
+PUBLIC_URL = (E("PUBLIC_URL", "") or E("PUBLIC_ORIGINS", "").split(",")[0]).strip().rstrip("/")
 
 DEDUP_SECONDS = 1800
 # Keine Verbindungs-Wiederverwendung: Healthchecks v5 (gunicorn sync) schließt ohnehin nach jeder Anfrage;
@@ -122,11 +124,20 @@ flags: dict = _load("flags.json", {})  # host -> {reboot, checked, sec_alerted}
 SEC_GRACE_H = 48  # Security-Update gilt danach als überfällig
 digest_state: dict = _load("digest.json", {})
 push_subs: dict = _load("push.json", {})  # endpoint -> Subscription
-push_state: dict = _load("push_state.json", {})  # check-uuid -> letzter Status
-last_sent: dict[str, float] = {}
+push_state: dict = _load("push_state.json", {})  # check-uuid -> letzter gemeldeter Status
+alert_state: dict = _load("alerts.json", {"down_since": {}})  # wann ein Job rot wurde (für „war … ausgefallen“)
+# Unterdrückung gleicher Meldungen: Schlüssel -> {fp: Inhalt/Zustand, ts}. In einer Datei, damit ein Neustart
+# (z. B. durch ein nächtliches Backup) nicht dieselbe Meldung erneut auslöst.
+dedup: dict = _load("dedup.json", {})
 
-state: dict = {"generated": None, "checks": [], "hosts": [], "pbs": {}, "errors": {}}
-cfg: dict = {"settings": {}, "hosts": {}, "checks": []}  # bis checks.yaml geladen ist (oder wenn sie fehlerhaft ist)
+state: dict = {"generated": None, "checks": [], "hosts": [], "pbs": {}, "errors": {}, "error_since": {}, "heartbeat": None}
+cfg: dict = {
+    "settings": {},
+    "hosts": {},
+    "checks": [],
+    "watch_images": [],
+    "_problems": [],
+}  # bis checks.yaml geladen ist (oder wenn sie fehlerhaft ist)
 
 
 def now() -> dt.datetime:
@@ -204,60 +215,140 @@ async def send_mail(subject: str, body: str, to: list[str] | None = None) -> boo
         return False
 
 
-async def send_signal(text: str, dedup_key: str | None = None, url: str = "/") -> bool:
-    """Meldung an alle Kanäle: Web Push, Mail, Signal (Name historisch)."""
-    if dedup_key:
-        t = last_sent.get(dedup_key, 0)
-        if time.time() - t < DEDUP_SECONDS:
-            log.info("Meldung unterdrückt (Dedup): %s", dedup_key)
-            return False
-        last_sent[dedup_key] = time.time()
+def channels_configured() -> bool:
+    """Gibt es überhaupt einen Weg, eine Meldung zuzustellen?"""
+    return bool((VAPID and push_subs) or (SMTP["host"] and mail_recipients()) or (SIGNAL_NUMBER and SIGNAL_RECIPIENT))
+
+
+def _dedup_hit(key: str, fp: str) -> bool:
+    e = dedup.get(key)
+    return bool(e) and e.get("fp") == fp and time.time() - e.get("ts", 0) < DEDUP_SECONDS
+
+
+def _dedup_note(key: str, fp: str) -> None:
+    t = time.time()
+    for k in [k for k, e in dedup.items() if t - e.get("ts", 0) > DEDUP_SECONDS * 4]:
+        dedup.pop(k)
+    dedup[key] = {"fp": fp, "ts": t}
+    _save("dedup.json", dedup)
+
+
+async def send_signal(text: str, dedup_key: str | None = None, url: str = "/", fp: str | None = None, mail_text: str | None = None) -> bool:
+    """Meldung an alle Kanäle: Web Push, Mail, Signal (Name historisch). True, wenn mindestens ein Kanal zugestellt hat.
+
+    Dedup: Gleicher Schlüssel UND gleicher Inhalt (fp, Standard: erste Zeile) innerhalb von 30 min wird unterdrückt.
+    Ein anderer Zustand (z. B. „down“ nach „up“) kommt immer durch. Gemerkt wird erst nach erfolgreicher Zustellung –
+    schlägt alles fehl, darf der nächste Versuch durch."""
     lines = text.strip().splitlines() or [""]
-    pushed = await push_all(lines[0], "\n".join(lines[1:]), url)
+    fp = fp if fp is not None else lines[0]
+    if dedup_key and _dedup_hit(dedup_key, fp):
+        log.info("Meldung unterdrückt (gleiche Meldung vor weniger als %d min): %s", DEDUP_SECONDS // 60, dedup_key)
+        return False
+    delivered = await push_all(lines[0], "\n".join(lines[1:]), url)
     subject = lines[0] if SITE_NAME in lines[0] else f"[{SITE_NAME}] {lines[0]}"
-    mailed = await send_mail(subject, text)
-    pushed += int(mailed)
-    if not (SIGNAL_NUMBER and SIGNAL_RECIPIENT):
-        if not pushed:
-            log.warning("Kein Kanal hat zugestellt: %s", text[:80])
-        return pushed > 0
-    body = {"message": text, "number": SIGNAL_NUMBER, "recipients": [SIGNAL_RECIPIENT]}
+    delivered += int(await send_mail(subject, mail_text or text))
+    if SIGNAL_NUMBER and SIGNAL_RECIPIENT:
+        body = {"message": text, "number": SIGNAL_NUMBER, "recipients": [SIGNAL_RECIPIENT]}
+        try:
+            async with httpx.AsyncClient(timeout=30) as cli:
+                r = await cli.post(f"{SIGNAL_URL}/v2/send", json=body)
+                r.raise_for_status()
+            delivered += 1
+        except Exception as exc:
+            log.error("Signal-Versand fehlgeschlagen: %s", exc)
+    if not delivered:
+        log.warning("Kein Kanal hat zugestellt: %s", text[:80])
+        return False
+    if dedup_key:
+        _dedup_note(dedup_key, fp)
+    return True
+
+
+async def _last_ping_info(uuid: str) -> dict:
+    """Letzter Ping eines Jobs: Fehler gemeldet? Zeitpunkt, Log. Leer, wenn Healthchecks nicht antwortet."""
     try:
-        async with httpx.AsyncClient(timeout=30) as cli:
-            r = await cli.post(f"{SIGNAL_URL}/v2/send", json=body)
-            r.raise_for_status()
-        return True
+        async with httpx.AsyncClient(timeout=10, headers={"X-Api-Key": CREDS.hc_api_key}, limits=NO_KEEPALIVE) as cli:
+            pings = (await cli.get(f"{HC_URL}/api/v3/checks/{uuid}/pings/")).raise_for_status().json().get("pings", [])
+            p = next((p for p in pings if p.get("type") not in ("start", "log")), None)
+            if not p:
+                return {}
+            body = None
+            if p.get("body_url"):
+                b = await cli.get(f"{HC_URL}{urlparse(p['body_url']).path}")
+                body = b.text[-20000:] if b.status_code == 200 else None
+            return {"failed": p.get("type") == "fail", "date": p.get("date"), "body": body}
     except Exception as exc:
-        log.error("Signal-Versand fehlgeschlagen: %s", exc)
-        return pushed > 0
+        log.warning("Letzter Ping von %s nicht lesbar: %s", uuid, exc)
+        return {}
 
 
 async def check_transitions() -> None:
-    """Push bei Statuswechsel eines Checks (grün→rot, rot→grün). Healthchecks schickt Signal selbst."""
+    """Statuswechsel der Jobs melden (grün→rot, rot→grün).
+
+    Modus "app": QuietBoard meldet über alle eigenen Kanäle (Push, Mail, Signal), mehrere Ausfälle eines Abrufs in einer
+    Nachricht. Der Zustand gilt erst als gemeldet, wenn ein Kanal zugestellt hat – sonst nächster Versuch beim nächsten
+    Abruf. Modus "hc": Healthchecks meldet über seine Integrationen, QuietBoard schickt zusätzlich nur Web Push."""
     if not state["checks"]:
         return
-    first = not push_state
-    changed = False
+    first = not push_state  # allererster Lauf: nur merken, nichts melden
+    now_ = now()
+    since = alert_state.setdefault("down_since", {})
+    downs, ups, changed = [], [], False
     for c in state["checks"]:
-        cur = c["status"]
+        cur, uid = c["status"], c["uuid"]
         if cur == "started":  # Laufzustand nicht merken, sonst geht rot→läuft→grün verloren
             continue
-        prev = push_state.get(c["uuid"])
+        prev = push_state.get(uid)
         if prev == cur:
             continue
-        push_state[c["uuid"]] = cur
-        changed = True
-        if first or prev is None or c["prio"] not in PUSH_PRIOS:
-            continue
-        url = f"/?c={c['uuid']}"
-        if cur == "down":
+        if cur == "down" and prev != "down":
+            since.setdefault(uid, now_.isoformat(timespec="seconds"))
+        alert = not first and c["prio"] in PUSH_PRIOS
+        if alert and cur == "down":
+            downs.append(c)  # auch neue Jobs (prev None), die gleich ausfallen
+        elif alert and prev == "down" and cur == "up":
+            ups.append(c)
+        else:
+            push_state[uid] = cur
+            changed = True
+            if cur != "down":
+                since.pop(uid, None)
+    if job_alerts_mode() == "hc":
+        for c in downs:
             await push_all(
-                "🔴 " + tr("{name} ausgefallen", name=c["name"]), tr("Kein Ping zur erwarteten Zeit oder Fehler gemeldet."), url, c["uuid"]
+                "🔴 " + tr("{name} ausgefallen", name=c["name"]),
+                tr("Kein Ping zur erwarteten Zeit oder Fehler gemeldet."),
+                f"/?c={c['uuid']}",
+                c["uuid"],
             )
-        elif prev == "down" and cur == "up":
-            await push_all("✅ " + tr("{name} wieder OK", name=c["name"]), "", url, c["uuid"])
+        for c in ups:
+            await push_all("✅ " + tr("{name} wieder OK", name=c["name"]), "", f"/?c={c['uuid']}", c["uuid"])
+        delivered = {c["uuid"] for c in downs + ups}
+    else:
+        delivered = set()
+        if downs:
+            infos = {c["uuid"]: await _last_ping_info(c["uuid"]) for c in downs}
+            text, mail, url = alerts.down_message(downs, infos, now_, PUBLIC_URL)
+            if await send_signal(text, url=url, mail_text=mail) or not channels_configured():
+                delivered |= {c["uuid"] for c in downs}
+        if ups:
+            text, url = alerts.up_message(ups, since, now_)
+            if await send_signal(text, url=url) or not channels_configured():
+                delivered |= {c["uuid"] for c in ups}
+    for c in downs + ups:
+        if c["uuid"] in delivered:
+            push_state[c["uuid"]] = c["status"]
+            changed = True
+            if c["status"] == "up":
+                since.pop(c["uuid"], None)
+    known = {c["uuid"] for c in state["checks"]}
+    for uid in [u for u in push_state if u not in known]:  # gelöschte Jobs vergessen
+        push_state.pop(uid)
+        since.pop(uid, None)
+        changed = True
     if changed:
         _save("push_state.json", push_state)
+        _save("alerts.json", alert_state)
 
 
 # ---------------------------------------------------------------- Datenquellen
@@ -268,6 +359,9 @@ async def fetch_checks(cli: httpx.AsyncClient) -> list[dict]:
     out = []
     for c in r.json()["checks"]:
         tags = dict(t.split(":", 1) for t in c.get("tags", "").split() if ":" in t)
+        if tags.get("src") == "app":  # Lebenszeichen von QuietBoard selbst – kein Job
+            state["heartbeat"] = {"uuid": c.get("uuid") or c.get("unique_key"), "status": c.get("status"), "last_ping": c.get("last_ping")}
+            continue
         status = c.get("status")
         if c.get("started") and status not in ("down",):
             status = "started"
@@ -279,6 +373,10 @@ async def fetch_checks(cli: httpx.AsyncClient) -> list[dict]:
                 "last_ping": c.get("last_ping"),
                 "next_ping": c.get("next_ping"),
                 "last_duration": c.get("last_duration"),
+                "schedule": c.get("schedule"),
+                "tz": c.get("tz"),
+                "timeout": c.get("timeout"),
+                "grace": c.get("grace"),
                 "host": tags.get("host", ""),
                 "typ": tags.get("typ", ""),
                 "prio": tags.get("prio") or prio.get(c["name"], "normal"),  # Healthchecks-Tag gewinnt (GUI ändert dort)
@@ -407,14 +505,39 @@ async def ensure_alerts() -> None:
 
 _last_refresh = 0.0
 _refresh_lock = asyncio.Lock()
+_bg_tasks: set[asyncio.Task] = set()  # Referenzen halten, sonst kann der GC laufende Tasks einsammeln
 
 
 async def refresh() -> None:
+    """Nie zwei Abrufe gleichzeitig (sonst z. B. doppelte Beszel-Alarme oder konkurrierende Einrichtung).
+    Läuft schon einer, wartet der Aufrufer auf dessen Ergebnis statt einen zweiten zu starten."""
+    if _refresh_lock.locked():
+        async with _refresh_lock:
+            return
+    async with _refresh_lock:
+        await _refresh()
+
+
+def refresh_soon(delay: float) -> None:
+    """Abruf in `delay` Sekunden anstoßen (z. B. nach einem Ingest), mit gehaltener Task-Referenz."""
+
+    def start():
+        t = asyncio.create_task(refresh())
+        _bg_tasks.add(t)
+        t.add_done_callback(_bg_tasks.discard)
+
+    asyncio.get_running_loop().call_later(delay, start)
+
+
+async def _refresh() -> None:
     global cfg, _last_refresh
     _last_refresh = time.monotonic()
     try:
         cfg = config.load()
-        state["errors"].pop("checks.yaml", None)  # repariert → Warnung weg
+        if cfg["_problems"]:
+            state["errors"]["checks.yaml"] = "; ".join(cfg["_problems"][:5])
+        else:
+            state["errors"].pop("checks.yaml", None)  # repariert → Warnung weg
     except Exception as exc:
         state["errors"]["checks.yaml"] = str(exc)
     if DEMO:
@@ -438,8 +561,23 @@ async def refresh() -> None:
                 state["checks" if name == "healthchecks" else "hosts"] = result
                 state["errors"].pop(name, None)
             except Exception as exc:
-                state["errors"][name] = f"nicht erreichbar: {exc}"
-                log.warning("%s: %s", name, exc)
+                state["errors"][name] = f"nicht erreichbar: {type(exc).__name__} {exc}".strip()
+                log.warning("%s: %s %s", name, type(exc).__name__, exc)
+                if (
+                    name == "beszel"
+                    and isinstance(exc, httpx.HTTPStatusError)
+                    and exc.response.status_code in (400, 401, 403)
+                    and not E("BESZEL_USER")
+                ):
+                    # Gespeicherter App-Zugang gilt nicht mehr (z. B. Beszel-Daten zurückgespielt): neu einrichten lassen
+                    log.warning("Beszel: App-Zugang abgelehnt – wird beim nächsten Abruf neu eingerichtet")
+                    CREDS.beszel_user = CREDS.beszel_pass = ""
+        if "healthchecks" not in state["errors"]:
+            try:
+                await ensure_job_alert_mode()
+                await ensure_heartbeat()
+            except Exception as exc:
+                log.warning("Job-Alarme/Lebenszeichen einrichten: %s", exc)
         await ensure_alerts()
         try:
             await check_transitions()
@@ -454,11 +592,101 @@ async def refresh() -> None:
                 state["pbs"][name] = {**prev, "online": False, "running": []}  # offline: keine "laufenden" Tasks anzeigen
         watch_cfg = json.dumps(cfg.get("watch_images"), sort_keys=True)
         if digest_state.get("watch_checked") != now().date().isoformat() or digest_state.get("watch_cfg") != watch_cfg:
-            await check_watch_images(cli)
+            try:
+                await check_watch_images(cli)
+            except Exception as exc:
+                log.warning("watch_images: %s", exc)
             digest_state["watch_checked"] = now().date().isoformat()
             digest_state["watch_cfg"] = watch_cfg
             _save("digest.json", digest_state)
+        try:
+            await check_source_outage()
+        except Exception:
+            log.exception("Quellen-Auswertung fehlgeschlagen")
     state["generated"] = now().isoformat(timespec="seconds")
+    await ping_heartbeat()
+
+
+# ---------------------------------------------------------------- Job-Alarme: Modus, Lebenszeichen, Quellen
+HEARTBEAT_NAME, HEARTBEAT_SLUG = "quietboard/app", "quietboard-app"
+SOURCE_ALERT_MIN = 15  # so lange darf eine Quelle (Healthchecks, Beszel) gestört sein, bevor gemeldet wird
+SOURCES_WATCHED = ("healthchecks", "beszel")
+
+
+async def ensure_job_alert_mode() -> None:
+    """Beim ersten Start mit dieser Version festlegen, wer Job-Ausfälle meldet.
+    QuietBoard ("app"), wenn Healthchecks nur die eigene Integration „E-Mail“ hat und kein Job Kanäle trägt (neue
+    Installation) – sonst bleibt es bei Healthchecks ("hc"), damit sich bei übernommenen Installationen nichts
+    ändert und nichts doppelt kommt. Umstellen: System → Benachrichtigungen."""
+    if STORE.get_setting("job_alerts") in ("app", "hc"):
+        return
+    chans = (await _hc("GET", "/api/v3/channels/")).json()["channels"]
+    foreign = [c for c in chans if not (c.get("kind") == "email" and c.get("name") == "E-Mail")]
+    checks = (await _hc("GET", "/api/v3/checks/")).json()["checks"]
+    assigned = [c for c in checks if c.get("channels") and "src:app" not in c.get("tags", "")]
+    mode = "hc" if foreign or assigned else "app"
+    STORE.set_setting("job_alerts", mode)
+    log.info(
+        "Job-Alarme über: %s (%d weitere Integrationen, %d Jobs mit Kanälen)",
+        "Healthchecks" if mode == "hc" else "QuietBoard",
+        len(foreign),
+        len(assigned),
+    )
+
+
+async def ensure_heartbeat() -> None:
+    """Check quietboard/app anlegen: QuietBoard pingt ihn bei jedem Abruf. Bleibt der Ping aus, meldet Healthchecks
+    selbst über seine Integrationen – so fällt auch ein Ausfall von QuietBoard auf. Wird nur einmal angelegt."""
+    if state.get("heartbeat") or not (CREDS.hc_api_key and CREDS.hc_ping_key) or STORE.get_setting("heartbeat_created"):
+        return
+    body = {
+        "name": HEARTBEAT_NAME,
+        "slug": HEARTBEAT_SLUG,
+        "tags": "host:quietboard typ:wartung prio:kritisch src:app",
+        "desc": tr("Lebenszeichen von QuietBoard. Wird rot, wenn die App nicht mehr läuft."),
+        "timeout": 300,
+        "grace": 600,
+        "channels": "*",  # alle Integrationen von Healthchecks: der einzige Alarm, der ohne QuietBoard funktioniert
+        "unique": ["slug"],
+    }
+    c = (await _hc("POST", "/api/v3/checks/", json=body)).json()
+    STORE.set_setting("heartbeat_created", True)
+    state["heartbeat"] = {"uuid": c.get("uuid") or c.get("unique_key"), "status": c.get("status"), "last_ping": None}
+    log.info("Lebenszeichen %s in Healthchecks angelegt", HEARTBEAT_NAME)
+
+
+async def ping_heartbeat() -> None:
+    if not (state.get("heartbeat") and CREDS.hc_ping_key) or DEMO:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10, limits=NO_KEEPALIVE) as cli:
+            await cli.post(f"{HC_URL}/ping/{CREDS.hc_ping_key}/{HEARTBEAT_SLUG}", content=APP_VERSION.encode())
+    except Exception as exc:
+        log.warning("Lebenszeichen nicht gesendet: %s", exc)
+
+
+async def check_source_outage() -> None:
+    """Healthchecks oder Beszel länger als SOURCE_ALERT_MIN gestört → einmal melden, bei Rückkehr Entwarnung."""
+    track = state.setdefault("error_since", {})
+    t = now()
+    for name in SOURCES_WATCHED:
+        err = state["errors"].get(name)
+        entry = track.get(name)
+        if err and not entry:
+            track[name] = {"since": t.isoformat(timespec="seconds"), "alerted": False}
+        elif err and not entry["alerted"]:
+            minutes = (t - dt.datetime.fromisoformat(entry["since"])).total_seconds() / 60
+            if minutes >= SOURCE_ALERT_MIN and await send_signal(
+                "🟠 " + tr("{q} gestört seit {m} min", q=name, m=int(minutes)) + f"\n{err[:300]}",
+                dedup_key=f"src:{name}",
+                fp="down",
+                url="/?t=sy",
+            ):
+                entry["alerted"] = True
+        elif not err and entry:
+            track.pop(name)
+            if entry["alerted"]:
+                await send_signal("✅ " + tr("{q} wieder erreichbar", q=name), dedup_key=f"src:{name}", fp="up", url="/?t=sy")
 
 
 # ---------------------------------------------------------------- Auswertung
@@ -556,8 +784,14 @@ def attention() -> list[dict]:
     for ev in events:
         if ev["ts"] < cutoff:
             break
-        if ev["prio"] in ("kritisch", "normal") and ev["source"] in ("pve", "pbs", "notify"):
+        # Alle Quellen (pve, pbs, notify, dockhand, nas, synology, …); Beszel-Meldungen stecken schon im Host-Status
+        if ev["prio"] in ("kritisch", "normal") and ev["source"] != "beszel":
             items.append({"level": "warn", "kind": "event", "title": ev["title"], "detail": ev["message"][:300]})
+    for name in SOURCES_WATCHED:  # ohne Quelle ist „alles grün“ keine Aussage
+        if state["errors"].get(name):
+            items.insert(
+                0, {"level": "bad", "kind": "source", "title": tr("{q} nicht erreichbar", q=name), "detail": state["errors"][name][:200]}
+            )
     return items
 
 
@@ -601,6 +835,9 @@ def digest_text() -> str:
     )
     if state["errors"]:
         lines.append("⚠️ " + tr("Quellen: {q}", q=", ".join(state["errors"])))
+    hb = state.get("heartbeat") or {}
+    if hb and hb.get("status") == "down":
+        lines.append("⚠️ " + tr("Lebenszeichen {n} war ausgefallen", n=HEARTBEAT_NAME))
     return "\n".join(lines)
 
 
@@ -631,7 +868,7 @@ def digest_due(t: str, current: dt.datetime, sent_on: str | None) -> bool:
 async def digest_loop() -> None:
     while True:
         try:
-            t = STORE.get_setting("digest_time") or (cfg.get("settings") or {}).get("digest_time", "07:00")
+            t = STORE.get_setting("digest_time") or config._hhmm((cfg.get("settings") or {}).get("digest_time", "07:00"))
             today = now().date().isoformat()
             if digest_due(t, now(), digest_state.get("sent")) and state["generated"]:
                 if await send_signal(digest_text()):
@@ -835,10 +1072,14 @@ def host_extra(beszel_name: str, gui: dict | None = None) -> dict:
     url = conf.get("url") or {}
     if isinstance(url, str):
         url = {"Weboberfläche": url}
+    if not isinstance(url, dict):
+        url = {}
     if "links" in g:
         url = {li["label"]: li["url"] for li in g["links"]}
     links = []
     for label, u in url.items():
+        if not _URL.fullmatch(str(u)):  # nur http(s) – auch aus checks.yaml
+            continue
         hostpart = re.sub(r"^\w+://", "", str(u)).split("/")[0].split(":")[0]
         links.append({"label": str(label), "url": str(u), "vpn": bool(_PRIV.search(hostpart))})
     return {"always_on": g.get("always_on", conf.get("always_on", True)), "links": links, "custom": bool(g)}
@@ -848,9 +1089,10 @@ def host_extra(beszel_name: str, gui: dict | None = None) -> dict:
 async def api_state(fresh: int = 0):
     """fresh=1 (Knopf ↻): Daten sofort neu holen statt bis zur nächsten Abfrage zu warten – höchstens alle 10 s."""
     if fresh and not DEMO:
-        async with _refresh_lock:
-            if time.monotonic() - _last_refresh >= 10:
-                await refresh()
+        if time.monotonic() - _last_refresh >= 10:
+            await refresh()
+        elif _refresh_lock.locked():
+            await refresh()  # wartet auf den laufenden Abruf
     hs = host_settings()
     return {
         "generated": state["generated"],
@@ -994,7 +1236,7 @@ async def ingest_updates(request: Request):
         _save("flags.json", flags)
     if not DEMO and host not in {h["name"] for h in state["hosts"]}:
         # Neuer Host (erster Bericht direkt nach der Installation): gleich nachsehen, ob sein Agent schon da ist
-        asyncio.get_running_loop().call_later(5, lambda: asyncio.create_task(refresh()))
+        refresh_soon(5)
     return {"ok": True, "count": len(items)}
 
 
@@ -1019,17 +1261,32 @@ async def ingest_pve(request: Request, source: str = "pve", host: str = "pve"):
     gui_jobs = {"checks": [c for c in state["checks"] if c.get("match")]}  # in der Oberfläche angelegte Jobs
     hits += [c for c in config.match_event(gui_jobs, source, host, fields) if c["slug"] not in seen]
     failed = severity == "error"
+    pinged, lost = [], []
     if hits and CREDS.hc_ping_key:
         async with httpx.AsyncClient(timeout=15, limits=NO_KEEPALIVE) as cli:
             for c in hits:
                 url = f"{HC_URL}/ping/{CREDS.hc_ping_key}/{c['slug']}" + ("/fail" if failed else "")
                 try:
-                    await cli.post(url, content=f"{title}\n\n{message}"[:90000].encode())
+                    r = await cli.post(url, content=f"{title}\n\n{message}"[:90000].encode())
+                    # 404 = Check fehlt in Healthchecks, 409 = Slug doppelt: Meldung käme nirgends an
+                    (pinged if r.status_code < 300 else lost).append((c, f"HTTP {r.status_code}"))
                 except Exception as exc:
+                    lost.append((c, type(exc).__name__))
                     log.error("Ping %s fehlgeschlagen: %s", c["slug"], exc)
+    if pinged:
         add_event(source, f"{host}: {title}", message, "info")
-        asyncio.get_running_loop().call_later(2, lambda: asyncio.create_task(refresh()))  # Job-Status gleich anzeigen
-    else:
+        refresh_soon(2)  # Job-Status gleich anzeigen
+    if lost:
+        # Job passt, aber Healthchecks hat die Meldung nicht angenommen: selbst melden, nie still verschlucken
+        names = ", ".join(f"{c['name']} ({why})" for c, why in lost)
+        prio = "normal" if failed or severity == "unknown" else "info"
+        add_event(source, tr("{host}: {title} (Job nicht erreichbar)", host=host, title=title), f"{names}\n\n{message}", prio)
+        if failed or severity == "unknown":
+            await send_signal(
+                f"🔴 {host}: {title}\n" + tr("Healthchecks hat die Meldung nicht angenommen: {names}", names=names),
+                dedup_key=f"pve:{host}:{title}",
+            )
+    if not hits or (not pinged and not lost):
         # Unbekanntes Event: nie still verschlucken, wenn es ein Fehler ist
         prio = "normal" if failed or severity == "unknown" else "info"
         add_event(source, tr("{host}: {title} (ohne Check)", host=host, title=title), message, prio)
@@ -1050,7 +1307,10 @@ async def ingest_beszel(request: Request):
         b = {"title": "Beszel", "message": (await request.body()).decode(errors="replace")}
     title, message = str(b.get("title", "Beszel")), str(b.get("message", ""))
     add_event("beszel", title, message, "normal")
-    await send_signal(f"🖥️ {title}\n{message}", dedup_key=f"beszel:{title}")
+    # Schlüssel ohne Zustandswort: „web01 is down“ und „web01 is up“ gehören zusammen; gleicher Zustand innerhalb
+    # von 30 min wird unterdrückt, ein Wechsel kommt immer durch (auch down → up → down).
+    subject = re.sub(r"\b(is\s+)?(down|up)\b|[^\w .:/-]", "", title, flags=re.I).strip() or title
+    await send_signal(f"🖥️ {title}\n{message}", dedup_key=f"beszel:{subject}", fp=title)
     return {"ok": True}
 
 
@@ -1073,7 +1333,10 @@ async def ingest_notify(request: Request):
     source = request.query_params.get("source") or str(b.get("source", "notify"))
     add_event(source, title, message, prio)
     if prio in ("kritisch", "normal"):
-        await send_signal(f"{'🔴' if prio == 'kritisch' else '🟡'} {title}\n{message}"[:2000], dedup_key=f"n:{title}")
+        # gleicher Titel von verschiedenen Hosts (z. B. „Backup fehlgeschlagen“) unterscheidet sich im Text
+        await send_signal(
+            f"{'🔴' if prio == 'kritisch' else '🟡'} {title}\n{message}"[:2000], dedup_key=f"n:{source}:{title}", fp=message[:1000]
+        )
     return {"ok": True}
 
 
@@ -1094,7 +1357,7 @@ async def ingest_signal_compat(token: str, request: Request):
     source = request.query_params.get("source", "dockhand")
     add_event(source, title, message, prio)
     if prio in ("kritisch", "normal"):
-        await send_signal(f"{'🔴' if prio == 'kritisch' else '🟡'} {message}"[:2000], dedup_key=f"n:{title}")
+        await send_signal(f"{'🔴' if prio == 'kritisch' else '🟡'} {message}"[:2000], dedup_key=f"n:{source}:{title}", fp=message[:1000])
     return {"timestamp": str(int(time.time() * 1000))}
 
 
@@ -1287,9 +1550,11 @@ async def users_delete(uid: int, request: Request):
 def _settings() -> dict:
     return {
         "mail_to": mail_recipients(),
-        "digest_time": STORE.get_setting("digest_time") or (cfg.get("settings") or {}).get("digest_time", "07:00"),
+        "digest_time": STORE.get_setting("digest_time") or config._hhmm((cfg.get("settings") or {}).get("digest_time", "07:00")),
         "channels": {"mail": bool(SMTP["host"]), "push": bool(VAPID), "signal": bool(SIGNAL_NUMBER and SIGNAL_RECIPIENT)},
         "language": i18n.lang(),
+        "job_alerts": job_alerts_mode(),
+        "hc_channels_backup": (DATA / HC_CHANNELS_BACKUP).exists(),
     }
 
 
@@ -1352,7 +1617,57 @@ async def settings_put(request: Request):
         if b["language"] not in i18n.LANGUAGES:
             raise HTTPException(400, "Sprache: de oder en")
         STORE.set_setting("language", b["language"])
+    if "job_alerts" in b:
+        mode = b["job_alerts"]
+        if mode not in ("app", "hc"):
+            raise HTTPException(400, "Job-Alarme: app oder hc")
+        try:
+            if mode == "app" and b.get("detach_hc_channels"):
+                await _detach_hc_channels()
+            if mode == "hc" and b.get("restore_hc_channels"):
+                await _restore_hc_channels()
+        except httpx.HTTPError as exc:
+            raise _hc_error(exc) from None
+        STORE.set_setting("job_alerts", mode)
+        log.info("Job-Alarme über: %s", "QuietBoard" if mode == "app" else "Healthchecks")
     return _settings()
+
+
+HC_CHANNELS_BACKUP = "hc-channels-backup.json"
+
+
+async def _detach_hc_channels() -> int:
+    """Integrationen von allen Jobs lösen (außer dem Lebenszeichen), damit nichts doppelt kommt. Die Integrationen
+    bleiben in Healthchecks; die bisherige Zuordnung wird gesichert (Zurück: _restore_hc_channels)."""
+    checks = (await _hc("GET", "/api/v3/checks/")).json()["checks"]
+    path = DATA / HC_CHANNELS_BACKUP
+    backup = _load(HC_CHANNELS_BACKUP, {}) if path.exists() else {}
+    n = 0
+    for c in checks:
+        uid = c.get("uuid") or c.get("unique_key")
+        if "src:app" in c.get("tags", "") or not c.get("channels"):
+            continue
+        backup.setdefault(uid, c["channels"])  # erste Sicherung gewinnt (mehrfaches Umschalten verliert nichts)
+        _save(HC_CHANNELS_BACKUP, backup)  # vor jeder Änderung sichern
+        await _hc("POST", f"/api/v3/checks/{uid}", json={"channels": ""})
+        n += 1
+    log.info("Integrationen von %d Job(s) gelöst, Zuordnung gesichert in %s", n, HC_CHANNELS_BACKUP)
+    return n
+
+
+async def _restore_hc_channels() -> int:
+    if not (DATA / HC_CHANNELS_BACKUP).exists():
+        return 0
+    backup = _load(HC_CHANNELS_BACKUP, {})
+    known = {c.get("uuid") or c.get("unique_key") for c in (await _hc("GET", "/api/v3/checks/")).json()["checks"]}
+    n = 0
+    for uid, channels in backup.items():
+        if uid in known:
+            await _hc("POST", f"/api/v3/checks/{uid}", json={"channels": channels})
+            n += 1
+    (DATA / HC_CHANNELS_BACKUP).rename(DATA / (HC_CHANNELS_BACKUP + ".restored"))
+    log.info("Integrationen von %d Job(s) wiederhergestellt", n)
+    return n
 
 
 @app.post("/api/notify/test")
@@ -1390,6 +1705,8 @@ async def system_info():
             "beszel": {"ok": not bz_err, "detail": bz_err or f"{len(state['hosts'])} Hosts", "url": BESZEL_PUBLIC},
         },
         "push_devices": len(push_subs),
+        "heartbeat": state.get("heartbeat"),
+        "job_alerts": job_alerts_mode(),
         "auth": "access" if _jwk else ("none" if ALLOW_NO_AUTH else "local"),
         "users": len(STORE.list_users()),
     }
@@ -1479,12 +1796,43 @@ def _hc_error(exc: httpx.HTTPError) -> HTTPException:
     return HTTPException(502, f"Healthchecks nicht erreichbar: {type(exc).__name__}")
 
 
-async def _channel_ids(prio: str) -> str:
+def job_alerts_mode() -> str:
+    """Wer meldet Job-Ausfälle: "app" (QuietBoard über alle eigenen Kanäle) oder "hc" (Integrationen von Healthchecks).
+    Solange nichts festgelegt ist: "hc" – so verhielt sich QuietBoard bisher."""
+    m = STORE.get_setting("job_alerts")
+    return m if m in ("app", "hc") else "hc"
+
+
+async def _managed_ids(prio: str) -> set[str]:
+    """Integrationen, die QuietBoard einer Priorität zuordnet (settings.channels bzw. Standard „E-Mail“).
+    Im Modus "app" keine: Dann meldet QuietBoard selbst, Healthchecks soll für Jobs still bleiben."""
+    if job_alerts_mode() == "app":
+        return set()
     names = ((cfg.get("settings") or {}).get("channels") or jobs_mod.DEFAULT_CHANNELS).get(prio, [])
     if not names:
-        return ""
+        return set()
     by_name = {c["name"]: c["id"] for c in (await _hc("GET", "/api/v3/channels/")).json()["channels"]}
-    return ",".join(by_name[n] for n in names if n in by_name)
+    return {by_name[n] for n in names if n in by_name}
+
+
+async def _channel_ids(prio: str) -> str:
+    """Kanäle für einen NEUEN Job."""
+    return ",".join(sorted(await _managed_ids(prio)))
+
+
+async def _channels_after_prio(current: dict, new_prio: str) -> str | None:
+    """Kanäle nach einer Prioritätsänderung: nur die von QuietBoard verwalteten austauschen, alle anderen (von Hand
+    in Healthchecks zugewiesenen) bleiben. None = nichts ändern."""
+    old_prio = jobs_mod.prio_of(current)
+    if old_prio == new_prio or job_alerts_mode() == "app":
+        return None
+    have = {c for c in (current.get("channels") or "").split(",") if c}
+    return ",".join(sorted((have - await _managed_ids(old_prio)) | await _managed_ids(new_prio)))
+
+
+def _slug_taken(slug: str, except_name: str | None = None) -> str | None:
+    """Name eines anderen Jobs mit demselben Slug (Healthchecks könnte Pings dann keinem zuordnen: 409)."""
+    return next((c["name"] for c in state["checks"] if c.get("slug") == slug and c["name"] != except_name), None)
 
 
 def _tz() -> str:
@@ -1524,6 +1872,9 @@ async def check_create(request: Request):
         raise HTTPException(400, str(exc)) from None
     if any(c["name"] == body["name"] for c in state["checks"]):
         raise HTTPException(409, f"Job {body['name']} gibt es schon")
+    other = _slug_taken(body["slug"])
+    if other:
+        raise HTTPException(409, f"Ping-Adresse {body['slug']} gehört schon zu {other} – bitte anderen Namen wählen")
     try:
         body["channels"] = await _channel_ids(prio)
         created = (await _hc("POST", "/api/v3/checks/", json=body)).json()
@@ -1551,7 +1902,9 @@ async def check_update(uuid: str, request: Request):
     try:
         current = (await _hc("GET", f"/api/v3/checks/{uuid}")).json()
         body, prio = jobs_mod.build(await _body(request), _tz(), current=current)
-        body["channels"] = await _channel_ids(prio)
+        channels = await _channels_after_prio(current, prio)  # sonst bleiben die Kanäle, wie sie sind
+        if channels is not None:
+            body["channels"] = channels
         await _hc("POST", f"/api/v3/checks/{uuid}", json=body)
     except jobs_mod.JobError as exc:
         raise HTTPException(400, str(exc)) from None
@@ -1582,6 +1935,7 @@ async def config_export(request: Request):
         checks = (await _hc("GET", "/api/v3/checks/")).json()["checks"] if CREDS.hc_api_key else []
     except httpx.HTTPError as exc:
         raise _hc_error(exc) from None
+    checks = [c for c in checks if "src:app" not in c.get("tags", "")]  # Lebenszeichen gehört nicht in die Datei
     hs = host_settings()
     hosts = {}
     for name in sorted({h["name"] for h in state["hosts"]} | set(hs)):
@@ -1605,60 +1959,90 @@ async def config_export(request: Request):
 
 @app.post("/api/config/import")
 async def config_import(request: Request):
-    """Body: {"yaml": "...", "dry": true|false}. Legt Jobs an/aktualisiert sie und übernimmt Host-Einstellungen – löscht nie."""
+    """Body: {"yaml": "...", "dry": true|false}. Legt Jobs an/aktualisiert sie und übernimmt Host-Einstellungen – löscht nie.
+    Erst wird alles geprüft; gibt es einen Fehler, wird nichts geschrieben (kein halber Import)."""
     require_admin(request)
     b = await _body(request)
+    text = b.get("yaml", "")
+    if not isinstance(text, str) or len(text) > 500_000:
+        raise HTTPException(400, "YAML fehlt oder ist zu groß (höchstens 500 000 Zeichen)")
     try:
-        doc = yaml.safe_load(str(b.get("yaml", ""))[:500_000]) or {}
+        doc = yaml.safe_load(text) or {}
     except yaml.YAMLError as exc:
         raise HTTPException(400, f"YAML fehlerhaft: {str(exc).splitlines()[0]}") from None
-    if not isinstance(doc, dict) or not isinstance(doc.get("checks", []), list) or not isinstance(doc.get("hosts", {}), dict):
+    if (
+        not isinstance(doc, dict)
+        or not isinstance(doc.get("checks") or [], list)
+        or not isinstance(doc.get("hosts") or {}, dict)
+        or not isinstance(doc.get("settings") or {}, dict)
+    ):
         raise HTTPException(400, "Erwartet: settings, hosts, checks wie in checks.yaml")
     dry = bool(b.get("dry", True))
-    tz = (doc.get("settings") or {}).get("tz") or _tz()
-    if doc.get("checks") and not CREDS.hc_api_key:
+    tz = str((doc.get("settings") or {}).get("tz") or _tz())
+    checks_in = doc.get("checks") or []
+    if checks_in and not CREDS.hc_api_key:
         raise HTTPException(503, "Healthchecks ist noch nicht eingerichtet")
     try:
-        existing = {c["name"]: c for c in (await _hc("GET", "/api/v3/checks/")).json()["checks"]} if doc.get("checks") else {}
+        existing = {c["name"]: c for c in (await _hc("GET", "/api/v3/checks/")).json()["checks"]} if checks_in else {}
     except httpx.HTTPError as exc:
         raise _hc_error(exc) from None
-    actions = []
-    for c in doc.get("checks") or []:
+
+    # 1. Prüfen
+    actions, plan, slugs = [], [], {}
+    for c in checks_in:
+        label = str(c.get("name", "?")).strip() if isinstance(c, dict) else "?"
+        cur = existing.get(label)
         try:
-            body, prio = jobs_mod.from_yaml_check(c, tz)
+            body, prio = jobs_mod.from_yaml_check(c, tz, current=cur)
         except jobs_mod.JobError as exc:
-            label = str(c.get("name", "?")) if isinstance(c, dict) else "?"
             actions.append({"name": label, "action": "Fehler", "detail": str(exc)})
             continue
-        cur = existing.get(body["name"])
-        act = {"name": body["name"], "action": "aktualisieren" if cur else "anlegen"}
-        if not dry:
-            try:
-                body["channels"] = await _channel_ids(prio)
-                if cur:
-                    body.pop("slug", None)
-                    await _hc("POST", f"/api/v3/checks/{cur.get('uuid') or cur.get('unique_key')}", json=body)
-                else:
-                    await _hc("POST", "/api/v3/checks/", json=body)
-            except httpx.HTTPError as exc:
-                act = {"name": body["name"], "action": "Fehler", "detail": _hc_error(exc).detail}
-        actions.append(act)
-    hosts = []
-    hs = host_settings()
+        slug = (cur or {}).get("slug") or body.get("slug") or config.slug(label)
+        clash = slugs.get(slug) or next((n for n, e in existing.items() if (e.get("slug") or config.slug(n)) == slug and n != label), None)
+        if clash:
+            actions.append({"name": label, "action": "Fehler", "detail": f"Ping-Adresse {slug} gehört schon zu {clash}"})
+            continue
+        slugs[slug] = label
+        plan.append((label, body, prio, cur))
+        actions.append({"name": label, "action": "aktualisieren" if cur else "anlegen"})
+    hosts, hs = [], host_settings()
     for key, h in (doc.get("hosts") or {}).items():
-        h = h or {}
+        h = h if isinstance(h, dict) else {}
         name = str(h.get("beszel") or key)
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name):
+            actions.append({"name": f"Host {name[:40]}", "action": "Fehler", "detail": "Ungültiger Hostname"})
+            continue
         url = h.get("url") or {}
         if isinstance(url, str):
             url = {"Weboberfläche": url}
-        links = [{"label": str(k)[:40], "url": str(v)} for k, v in url.items() if _URL.fullmatch(str(v))]
+        if not isinstance(url, dict):
+            url = {}
+        links = [{"label": str(k)[:40], "url": str(v)} for k, v in list(url.items())[:10] if _URL.fullmatch(str(v))]
         hosts.append({"name": name, "always_on": bool(h.get("always_on", True)), "links": len(links)})
         hs[name] = {"always_on": bool(h.get("always_on", True)), "links": links}
-    if not dry:
-        if hosts:
-            STORE.set_setting("hosts", hs)
-        await refresh()
-    return {"dry": dry, "checks": actions, "hosts": hosts}
+    has_errors = any(a["action"] == "Fehler" for a in actions)
+    if dry or has_errors:
+        return {"dry": True, "checks": actions, "hosts": hosts, "applied": False}
+
+    # 2. Schreiben
+    done = {}
+    for label, body, prio, cur in plan:
+        try:
+            if cur:
+                channels = await _channels_after_prio(cur, prio)  # sonst bleiben die Kanäle des Checks
+                if channels is not None:
+                    body["channels"] = channels
+                await _hc("POST", f"/api/v3/checks/{cur.get('uuid') or cur.get('unique_key')}", json=body)
+            else:
+                body["channels"] = await _channel_ids(prio)
+                await _hc("POST", "/api/v3/checks/", json=body)
+        except httpx.HTTPError as exc:
+            done[label] = {"name": label, "action": "Fehler", "detail": _hc_error(exc).detail}
+    actions = [done.get(a["name"], a) for a in actions]
+    if hosts:
+        STORE.set_setting("hosts", hs)
+    await refresh()
+    return {"dry": False, "checks": actions, "hosts": hosts, "applied": True}
 
 
 @app.post("/api/checks/{uuid}/{action}")
@@ -1675,11 +2059,15 @@ async def check_action(uuid: str, action: str, request: Request):
                 raise HTTPException(400, "Priorität: kritisch, normal oder info")
             current = (await _hc("GET", f"/api/v3/checks/{uuid}")).json()
             tags = [t for t in current.get("tags", "").split() if not t.startswith("prio:")] + [f"prio:{prio}"]
-            await _hc("POST", f"/api/v3/checks/{uuid}", json={"tags": " ".join(tags), "channels": await _channel_ids(prio)})
+            upd = {"tags": " ".join(tags)}
+            channels = await _channels_after_prio(current, prio)
+            if channels is not None:
+                upd["channels"] = channels
+            await _hc("POST", f"/api/v3/checks/{uuid}", json=upd)
         else:
             raise HTTPException(404)
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"Healthchecks: {exc}") from None
+        raise _hc_error(exc) from None
     await refresh()
     return {"ok": True, "check": next((c for c in state["checks"] if c["uuid"] == uuid), None)}
 

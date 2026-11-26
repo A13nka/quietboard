@@ -40,6 +40,7 @@
 | `TUNNEL_TOKEN` | Cloudflare Tunnel (profile `tunnel`) |
 | `ACCESS_TEAM`, `ACCESS_AUD` | Cloudflare Access as sign-in |
 | `TRUSTED_PROXIES` | proxies whose forwarded headers (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) are honoured: container names and/or networks, comma-separated (default `cloudflared`). These headers are ignored from everyone else |
+| `PUBLIC_URL` | address of the web UI, e.g. `https://status.example.org` – for links in Signal and mail messages (optional) |
 | `PUBLIC_ORIGINS` | only needed if a proxy rewrites the `Host` header: addresses of the web UI, e.g. `https://status.example.org` |
 | `HC_API_KEY`, `HC_PING_KEY`, `BESZEL_APP_USER`, `BESZEL_APP_PASS` | existing Healthchecks/Beszel instead of self-setup |
 | `STATUS_IMAGE` | a completely different image (e.g. built locally) |

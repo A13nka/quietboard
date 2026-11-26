@@ -52,6 +52,15 @@ def _tags(tag_str: str) -> dict:
     return dict(t.split(":", 1) for t in (tag_str or "").split() if ":" in t)
 
 
+def _plain_tags(tag_str: str) -> list[str]:
+    """Tags ohne Doppelpunkt (z. B. „wichtig“, „offsite“) – gehören dem Benutzer und bleiben beim Bearbeiten erhalten."""
+    return [t for t in (tag_str or "").split() if ":" not in t]
+
+
+def prio_of(check: dict) -> str:
+    return _tags(check.get("tags", "")).get("prio", "normal")
+
+
 def match_from_tags(tags: dict) -> dict | None:
     """Tags eines GUI-Jobs → match-Block wie in checks.yaml (für PVE/PBS-Webhooks)."""
     src = tags.get("src")
@@ -73,7 +82,7 @@ def build(d: dict, tz: str, current: dict | None = None, extra_tags: dict | None
     Gibt (body, prio) zurück; die Kanäle setzt der Aufrufer passend zur Priorität."""
     if current:
         name = current["name"]
-        host = name.split("/", 1)[0]
+        host = _tags(current.get("tags", "")).get("host") or name.split("/", 1)[0]
     else:
         host = str(d.get("host", "")).strip().lower()
         job = str(d.get("job", "")).strip().lower()
@@ -108,17 +117,21 @@ def build(d: dict, tz: str, current: dict | None = None, extra_tags: dict | None
                     raise JobError("Job-ID/Datastore: nur Buchstaben, Ziffern, Punkt, Binde- oder Unterstrich")
                 tags[key] = val
 
+    plain = [t for t in _plain_tags((current or {}).get("tags", "")) if t not in tags]
     body: dict = {
         "name": name,
-        "tags": config.tag_string(tags),
+        "tags": " ".join([config.tag_string(tags), *plain]).strip(),
         "desc": str(d.get("desc") or "")[:500],
         "grace": _dur(d.get("grace") or "1h", "Darf dauern"),
     }
     if not current:
         body["slug"] = config.slug(name)
     if (d.get("mode") or "cron") == "cron":
-        schedule = " ".join(str(d.get("schedule") or "").split())
-        if len(schedule.split()) != 5:
+        raw = str(d.get("schedule") or "").strip()
+        # Cron (5 Felder) oder OnCalendar (systemd-Syntax, z. B. übernommene Checks) – Healthchecks prüft genau
+        schedule = " ".join(raw.split()) if len(raw.split()) == 5 else raw
+        oncalendar = re.search(r"[0-9*]|\b(minutely|hourly|daily|weekly|monthly|quarterly|semiannually|yearly|annually)\b", schedule)
+        if not schedule or len(schedule) > 100 or (len(schedule.split()) != 5 and not oncalendar):
             raise JobError('Zeitplan: Cron mit 5 Feldern, z. B. "0 3 * * *" (täglich 3:00)')
         body.update(schedule=schedule, tz=str(d.get("tz") or tz))
     else:
@@ -174,10 +187,15 @@ def to_yaml_check(c: dict, tz: str) -> dict:
     return out
 
 
-def from_yaml_check(c: dict, tz: str) -> tuple[dict, str]:
-    """Eintrag aus checks.yaml → Healthchecks-Body (wie build, PVE/PBS-match wird zu Tags)."""
+def from_yaml_check(c: dict, tz: str, current: dict | None = None) -> tuple[dict, str]:
+    """Eintrag aus checks.yaml → Healthchecks-Body (wie build, PVE/PBS-match wird zu Tags).
+
+    current = vorhandener Check gleichen Namens: Name und Slug bleiben, wie sie sind (auch mit Großbuchstaben oder
+    Leerzeichen aus übernommenen Installationen); nur neue Checks müssen dem Namensschema folgen."""
     if not isinstance(c, dict) or not c.get("name"):
         raise JobError("Eintrag ohne name")
+    if not isinstance(c.get("tags") or {}, dict) or not isinstance(c.get("match") or {}, dict):
+        raise JobError("tags und match müssen Blöcke sein")
     name = str(c["name"]).strip().lower()
     host, sep, job = name.partition("/")
     if not sep:
@@ -203,7 +221,12 @@ def from_yaml_check(c: dict, tz: str) -> tuple[dict, str]:
     }
     if d["src"] in ("pve", "pbs") and not d["ev"]:
         d["ev"] = "vzdump" if d["src"] == "pve" else "verify"
-    body, prio = build(d, tz, extra_tags={k: v for k, v in tags.items() if k != "host"})
-    body["name"] = str(c["name"]).strip()  # Name wie in der Datei (so passt er zu bestehenden Checks)
+    extra = {k: v for k, v in tags.items() if k != "host"}
+    if current:
+        body, prio = build(d, tz, current=current, extra_tags=extra)
+        body.pop("slug", None)
+        return body, prio
+    body, prio = build(d, tz, extra_tags=extra)
+    body["name"] = str(c["name"]).strip()  # Name wie in der Datei
     body["slug"] = config.slug(body["name"])
     return body, prio
