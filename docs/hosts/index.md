@@ -23,13 +23,21 @@ Optionen vor `bash`:
 
 | Variable | Wirkung |
 | --- | --- |
-| `QB_HOST=nas` | Name in QuietBoard (Standard: `hostname -s`) |
+| `QB_HOST=nas` | Name in QuietBoard (Standard: bisheriger Name, bei neuen Hosts `hostname -s` in Kleinbuchstaben) |
 | `QB_AGENT_MODE=binary` oder `docker` | Agent-Art erzwingen (Standard: automatisch) |
 | `QB_SECURITY_UPDATES=0` | keine automatischen Sicherheitsupdates einrichten |
 
 Beispiel: `… | QB_HOST=pve QB_SECURITY_UPDATES=0 bash`
 
-Erneut ausführen ist gefahrlos (Aktualisieren). Der Token im Befehl erlaubt das Melden an diesen Server – nicht öffentlich teilen.
+Erneut ausführen ist gefahrlos (Aktualisieren): Name und eigene Zeilen in `/etc/hc.conf` (z. B. `MAILCOW_DIR`) bleiben,
+das Agent-Programm wird gegen seine Prüfsumme geprüft. Ein vorhandener Container `beszel-agent`, den nicht QuietBoard
+angelegt hat, wird mit Hinweis ersetzt. Der Token im Befehl erlaubt das Melden an diesen Server – nicht öffentlich
+teilen, und den Befehl nur im LAN, per VPN oder über HTTPS ausführen ([Netzwerk](../install/network.md)).
+
+!!! note "Agent und Docker"
+    Als Binary kommt der Agent-Benutzer `beszel` in die Gruppe `docker`, damit er Container-Werte lesen kann. Diese
+    Gruppe hat praktisch root-Rechte. Wer das nicht möchte: `QB_AGENT_MODE=docker` (Socket nur lesend eingebunden)
+    oder den Benutzer danach mit `gpasswd -d beszel docker` wieder herausnehmen.
 
 ### Was QuietBoard je Host automatisch einrichtet
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # hc – Healthchecks-Helfer für Skripte und Timer.
 # Installation: install -m 0755 hc /usr/local/bin/hc ; Konfiguration in /etc/hc.conf (siehe hc.conf.example)
+# Fehlt die Konfiguration, führt `hc run` den Befehl trotzdem aus und warnt nur.
 #
 #   hc run  <slug> -- <befehl ...>        meldet Start, führt aus, meldet Exitcode + Log (letzte 20 KB), reicht Exitcode durch
 #   hc ping <slug> [start|fail|log|<rc>] [-]  einzelner Ping; mit "-" wird stdin als Text mitgeschickt
@@ -9,23 +10,33 @@
 # Beispiel systemd:  ExecStart=/usr/local/bin/hc run docker01-backup -- /usr/local/bin/backup.sh
 set -uo pipefail
 
-CONF=${HC_CONF:-/etc/hc.conf}
-[ -r "$CONF" ] || [ ! -r /usr/local/etc/quietboard.conf ] || CONF=/usr/local/etc/quietboard.conf   # Synology
+# Konfiguration: HC_CONF, sonst /etc/hc.conf (root), sonst /etc/hc-ping.conf (nur Ping-Daten, für Nicht-root lesbar),
+# sonst /usr/local/etc/quietboard.conf (Synology)
+CONF=${HC_CONF:-}
+if [ -z "$CONF" ]; then
+  for c in /etc/hc.conf /etc/hc-ping.conf /usr/local/etc/quietboard.conf; do
+    [ -r "$c" ] && { CONF=$c; break; }
+  done
+fi
 # shellcheck disable=SC1090
-[ -r "$CONF" ] && . "$CONF"
-: "${HC_PING_BASE:?HC_PING_BASE fehlt in $CONF}"
-: "${HC_PING_KEY:?HC_PING_KEY fehlt in $CONF}"
+[ -n "$CONF" ] && [ -r "$CONF" ] && . "$CONF"
+ready() { [ -n "${HC_PING_BASE:-}" ] && [ -n "${HC_PING_KEY:-}" ]; }
+warn_conf() { echo "hc: keine Ping-Daten (HC_PING_BASE/HC_PING_KEY) in ${CONF:-/etc/hc.conf} lesbar – Meldung an Healthchecks entfällt" >&2; }
 
-send() { # <slug> <suffix> [bodyfile]
+send() { # <slug> <suffix> [bodyfile] [kurz]
+  ready || return 1
   local url="$HC_PING_BASE/$HC_PING_KEY/$1${2:+/$2}"
   # Auch „Verbindung abgelehnt“ wiederholen (z. B. Healthchecks startet gerade neu, etwa durch ein nächtliches
   # Volume-Backup) – insgesamt bis zu 2 Minuten, damit die Abschlussmeldung eines Jobs nicht verloren geht.
+  # Der Start-Ping wartet nur kurz (20 s), damit der eigentliche Job nicht verzögert wird.
   local args=(-fsS -m 15 --retry 8 --retry-delay 10 --retry-max-time 120 --retry-connrefused -o /dev/null)
+  [ -n "${4:-}" ] && args=(-fsS -m 5 --retry 3 --retry-delay 5 --retry-max-time 20 --retry-connrefused -o /dev/null)
   if [ -n "${3:-}" ]; then args+=(--data-binary "@$3"); else args+=(-X POST); fi
   local err
   # Zwischenfehler der Wiederholungen nicht ausgeben (sonst schickt cron jede Nacht eine Mail) – nur das Endergebnis
   if ! err=$(curl "${args[@]}" "$url" 2>&1); then
     echo "hc: Ping fehlgeschlagen: ${url/$HC_PING_KEY/***} – ${err##*$'\n'}" >&2
+    return 1
   fi
 }
 
@@ -34,26 +45,29 @@ case "${1:-}" in
     slug=${2:?Slug fehlt}; shift 2
     [ "${1:-}" = "--" ] && shift
     [ $# -gt 0 ] || { echo "hc run: Befehl fehlt" >&2; exit 2; }
-    rid=$(cat /proc/sys/kernel/random/uuid)
+    # Der Befehl läuft immer – auch ohne lesbare Konfiguration oder wenn Healthchecks nicht erreichbar ist.
+    ready || warn_conf
+    rid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N)
     out=$(mktemp); trap 'rm -f "$out" "$out.t"' EXIT
-    send "$slug" "start?rid=$rid"
+    ready && send "$slug" "start?rid=$rid" "" kurz
     t0=$(date +%s)
     "$@" 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
     tail -c 20000 "$out" > "$out.t"
     # Abschlusszeile: QuietBoard nennt den Exitcode in der Meldung (Healthchecks gibt ihn nicht heraus)
     printf '\n[hc] exit %s, %ss\n' "$rc" "$(( $(date +%s) - t0 ))" >> "$out.t"
-    send "$slug" "$rc?rid=$rid" "$out.t"
+    ready && send "$slug" "$rc?rid=$rid" "$out.t"
     exit "$rc"
     ;;
   ping)
     slug=${2:?Slug fehlt}; kind=${3:-}
+    ready || { warn_conf; exit 1; }
     [ "$kind" = - ] && { kind=""; set -- "$1" "$2" "" -; }
     if [ "${4:-}" = - ]; then
-      tmp=$(mktemp); head -c 100000 > "$tmp"; send "$slug" "$kind" "$tmp"; rm -f "$tmp"
+      tmp=$(mktemp); head -c 100000 > "$tmp"; send "$slug" "$kind" "$tmp"; rc=$?; rm -f "$tmp"; exit "$rc"
     else
       send "$slug" "$kind"
     fi
     ;;
   *)
-    sed -n '2,9p' "$0"; exit 2 ;;
+    sed -n '2,10p' "$0"; exit 2 ;;
 esac

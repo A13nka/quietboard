@@ -259,3 +259,19 @@ def test_truncated_pve_event_still_counts_as_error():
     r = c.post("/api/ingest/pve?host=pve", content=raw.encode(), headers=AUTH)
     assert r.status_code == 200
     assert main.events[0]["prio"] == "normal" and "vzdump backup failed" in main.events[0]["title"]
+
+
+def test_outgoing_request_log_hides_ping_key_and_push_endpoint(caplog):
+    import httpx
+
+    security.install_log_filter()
+    lg = logging.getLogger("httpx")
+    fmt = 'HTTP Request: %s %s "%s %d %s"'
+    with caplog.at_level(logging.INFO, logger="httpx"):
+        lg.info(fmt, "POST", httpx.URL("http://healthchecks:8000/ping/abcdefghijklmnopqrstuv/quietboard-app"), "HTTP/1.1", 200, "OK")
+        lg.info(fmt, "POST", httpx.URL("https://web.push.apple.com/FAKEendpointAbCdEf"), "HTTP/1.1", 201, "Created")
+        lg.info(fmt, "GET", httpx.URL("https://pbs.lan:8007/api2/json/status"), "HTTP/1.1", 200, "OK")
+    text = caplog.text
+    assert "abcdefghijklmnopqrstuv" not in text and "/ping/***/quietboard-app" in text
+    assert "FAKEendpointAbCdEf" not in text and "https://web.push.apple.com/***" in text
+    assert "https://pbs.lan:8007/api2/json/status" in text

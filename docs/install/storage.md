@@ -35,7 +35,9 @@ docker compose --profile signal --profile tunnel down          # stoppt alles, D
 docker run --rm -v "$D:/d" alpine:3.22 sh -c \
   'mkdir -p /d/status /d/healthchecks /d/beszel /d/bootstrap /d/signal'
 for v in status:status-data healthchecks:healthchecks-data beszel:beszel-data bootstrap:bootstrap signal:signal-data; do
-  docker run --rm -v "quietboard_${v#*:}:/from:ro" -v "$D/${v%%:*}:/to" alpine:3.22 cp -a /from/. /to/ 2>/dev/null || true
+  docker volume inspect "quietboard_${v#*:}" >/dev/null 2>&1 || continue   # z. B. signal-data ohne Profil signal
+  docker run --rm -v "quietboard_${v#*:}:/from:ro" -v "$D/${v%%:*}:/to" alpine:3.22 cp -a /from/. /to/ \
+    || { echo "Kopieren von ${v#*:} fehlgeschlagen – alte Volumes NICHT löschen"; break; }
 done
 docker run --rm -v "$D:/d" alpine:3.22 sh -c 'chown -R 10001 /d/status && chown -R 999:999 /d/healthchecks'
 ```

@@ -35,7 +35,7 @@
 | `VAPID_SUBJECT` | contact for push services (`mailto:…`) |
 | `BESZEL_ALERT_DOWN_MIN` | minutes until the offline alert of new hosts (default 5) |
 | `POLL_SECONDS` | polling interval of the engines (default 60) |
-| `PBS_TARGETS` | Proxmox Backup Server: `name\|url\|tokenid\|secret`, several separated by `;` |
+| `PBS_TARGETS` | Proxmox Backup Server: `name\|url\|tokenid\|secret[\|check]`, several separated by `;`. Certificate check (recommended): SHA-256 fingerprint from the PBS dashboard ("Show Fingerprint"), `ca:/path/ca.pem` or `verify` (public CA). Without it the certificate is not checked (warning in the log; probably on by default from v0.7) |
 | `SIGNAL_NUMBER`, `SIGNAL_RECIPIENT` | Signal (profile `signal`) |
 | `TUNNEL_TOKEN` | Cloudflare Tunnel (profile `tunnel`) |
 | `ACCESS_TEAM`, `ACCESS_AUD` | Cloudflare Access as sign-in |

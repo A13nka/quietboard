@@ -41,6 +41,18 @@ Der Kurzname (Slug) ist der Job-Name mit `-` statt `/`. In Cron: `0 3 * * * root
 
 Das Log eines fehlgeschlagenen Laufs steht in der App direkt in der aufgeklappten Zeile.
 
+`hc run` führt den Befehl immer aus – auch wenn Healthchecks nicht erreichbar oder die Konfiguration nicht lesbar ist
+(dann nur mit Warnung). **Jobs ohne root:** `/etc/hc.conf` ist nur für root lesbar, weil dort auch der Ingest-Token
+steht. Für andere Benutzer eine Datei nur mit den Ping-Daten anlegen:
+
+```bash
+sudo sh -c 'grep -E "^HC_PING_(BASE|KEY)=" /etc/hc.conf > /etc/hc-ping.conf'
+sudo groupadd -f hc && sudo chgrp hc /etc/hc-ping.conf && sudo chmod 640 /etc/hc-ping.conf
+sudo usermod -aG hc <benutzer>
+```
+
+`hc` nimmt `/etc/hc-ping.conf`, wenn `/etc/hc.conf` nicht lesbar ist (oder ausdrücklich `HC_CONF=/pfad`).
+
 ## Andere Absender
 
 | Absender | Weg |

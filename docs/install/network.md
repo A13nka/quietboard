@@ -22,6 +22,32 @@ Freigeben (wenn überhaupt) nur **Port 8088** (die App). Healthchecks (8000) und
 
 `BIND_ADDR` in `.env` legt fest, auf welcher Adresse die Ports lauschen (Standard: alle). Die Adressen, unter denen Hosts den Server erreichen, stehen in `HC_PUBLIC_URL`, `HC_PING_ENDPOINT` und `BESZEL_PUBLIC_URL`; `install.sh` setzt sie auf die erste IP des Servers. Nach einer Änderung: `docker compose up -d`.
 
+## Docker umgeht die Firewall (ufw)
+
+Docker trägt seine Portfreigaben direkt in iptables ein – **vor** den Regeln von ufw oder firewalld. Ein `ufw deny 8000`
+wirkt deshalb nicht auf die Container-Ports. Auf einem Server mit öffentlicher Adresse also entweder:
+
+- `BIND_ADDR` auf die LAN- oder VPN-Adresse setzen (dann lauschen die Ports nur dort), **oder**
+- in der Kette `DOCKER-USER` sperren, die Docker vor seine eigenen Regeln setzt:
+
+  ```bash
+  # alles von der öffentlichen Schnittstelle zu den Container-Ports verwerfen (eth0 anpassen)
+  sudo iptables -I DOCKER-USER -i eth0 -p tcp -m multiport --dports 8000,8080,8090 -j DROP
+  sudo iptables -I DOCKER-USER -i eth0 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+  ```
+
+  Es zählen die Ports **im Container** (8080 für die App, nicht 8088). Damit die Regeln einen Neustart überstehen:
+  `iptables-persistent` (`netfilter-persistent save`) oder ein eigener systemd-Dienst.
+
+`install.sh` warnt, wenn der Server eine öffentliche Adresse hat und `BIND_ADDR` nicht gesetzt ist.
+
+## Host-Befehl nur über vertraute Wege
+
+Der Befehl aus **Host hinzufügen** lädt ein Skript mit Zugangsdaten (Ping-Key, Ingest-Token, Agent-Token). Über
+`http://` ist das nur im eigenen LAN oder durch ein VPN in Ordnung. Wer den Weg mitlesen oder umleiten kann, bekommt
+sonst die Zugangsdaten – oder schiebt dem Host ein anderes Skript unter, das als root läuft. Über das Internet daher nur
+mit HTTPS (Reverse Proxy, Tunnel) oder per VPN.
+
 ## Variante 1: alles im selben LAN
 
 Nichts weiter zu tun. Ports nicht ins Internet freigeben. Für Web Push auf dem Handy fehlt nur HTTPS (siehe unten).

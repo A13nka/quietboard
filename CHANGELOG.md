@@ -6,6 +6,39 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Hinweis zur Anbindung der Hosts
+Der Server lässt sich allein aktualisieren – Hosts mit älteren Skripten melden weiter wie bisher. Die neuen Fassungen
+von `hc` und `updates-report` bekommen Hosts auf zwei Wegen:
+
+- **Mit QuietBoard eingerichtet:** den Befehl aus *System → Host hinzufügen* erneut ausführen.
+- **Von Hand oder mit älteren Skripten eingerichtet:** `hosts/upgrade-host.sh` aus dem Release-Paket. Es tauscht nur
+  diese zwei Dateien, prüft vorher und zeigt, was sich ändert, und kann alles zurückdrehen (siehe
+  [Aktualisieren → Hosts von Hand](docs/install/update.md)).
+
+Zwei Änderungen im Verhalten:
+
+- `hc ping` liest Text von stdin nur noch mit `-` am Ende (`… | hc ping <slug> log -`). Das Umstellungsskript
+  findet solche Stellen und ergänzt das `-` auf Wunsch.
+- `hc` und `updates-report` brauchen `HC_PING_BASE` und `STATUS_INGEST_URL` in `/etc/hc.conf`. Ältere Fassungen hatten
+  dafür einen eingebauten Standard.
+
+### Behoben
+- **`hc run` führt den Befehl immer aus,** auch wenn die Konfiguration fehlt oder nicht lesbar ist (vorher brach es ab, und z. B. das Backup lief gar nicht). Der Start-Ping wartet nur noch 20 s statt bis zu 2 min. Für Jobs ohne root: `/etc/hc-ping.conf` (nur Ping-Daten).
+- **`updates-report`:** Scheitert `apt`, meldet der Host einen Fehler statt „alles aktuell“, die App behält den letzten Stand und zeigt den Fehler. „Security“ nur noch aus der Paketquelle, nicht aus dem Paketnamen. Berichte älter als 3 Tage erscheinen als „veraltet“.
+- **Host-Installer:** behält eigene Zeilen in `/etc/hc.conf` (z. B. `MAILCOW_DIR`) und den bisherigen Host-Namen; neue Hosts heißen `hostname -s` in Kleinbuchstaben. Werte werden gequotet, das Agent-Programm gegen seine Prüfsumme geprüft, und beim sudo-Weg stehen die Zugangsdaten nicht mehr in der Prozessliste. Vor dem Ersetzen eines fremden `beszel-agent`-Containers kommt ein Hinweis.
+- `generate-env.sh`: Fehlte der Zeilenumbruch am Ende der `.env`, wurde der erste neue Wert an den letzten angehängt (Secret unbrauchbar).
+- `install.sh` aus `main` installiert die neueste Release-Version (Dateien und Image passen zusammen); `QB_VERSION=v0` oder `latest` funktionieren, gleitende Tags in `.env` bleiben beim erneuten Ausführen. Warnung bei öffentlicher Adresse ohne `BIND_ADDR`.
+- `healthchecks-init` bricht mit Erklärung ab, wenn `ADMIN_EMAIL` geändert wurde, statt ein zweites Konto mit neuen Keys anzulegen; die Schlüsseldatei bleibt nicht im Init-Container liegen.
+- Ping-Key von Healthchecks und Push-Adressen stehen nicht mehr im Klartext im Log.
+
+### Neu
+- PBS: Zertifikat per Fingerprint, eigener CA oder öffentlicher CA prüfen (5. Feld in `PBS_TARGETS`). Ohne Angabe wie bisher ungeprüft, mit Warnung im Log.
+
+### Doku
+- Netzwerk: Docker umgeht ufw – Beispiel mit `DOCKER-USER`; Host-Befehl nur im LAN, per VPN oder über HTTPS.
+- Sicherung und Umzug brechen bei Fehlern ab, prüfen die Archive und sichern `compose.override.yaml` mit.
+- Aktualisieren bei fester Version in `.env`; Agent-Benutzer und Gruppe `docker`.
+
 ## 0.6.0 – 2026-11-26
 
 ### Neu

@@ -161,18 +161,22 @@ async def _send_simple(send, status: int, body: bytes) -> None:
 # ---------------------------------------------------------------- Zugriffslog ohne Token
 _TOKEN_IN_PATH = re.compile(r"(/api/ingest/signal/)[^/?\s]+")
 _TOKEN_IN_QUERY = re.compile(r"((?:^|[?&])token=)[^&\s]*")
+# Ausgehende Anfragen (httpx): Ping-Key bzw. UUID von Healthchecks, Push-Adressen der Browser (sind selbst Zugangsdaten)
+_PING_KEY = re.compile(r"(/ping/)[^/?\s\"]+")
+_PUSH_ENDPOINT = re.compile(r"(https://[^/\s\"]*(?:push|fcm)[^/\s\"]*/)[^\s\"]+")
 
 
 def mask_tokens(s: str) -> str:
-    return _TOKEN_IN_QUERY.sub(r"\1***", _TOKEN_IN_PATH.sub(r"\1***", s))
+    s = _TOKEN_IN_QUERY.sub(r"\1***", _TOKEN_IN_PATH.sub(r"\1***", s))
+    return _PUSH_ENDPOINT.sub(r"\1***", _PING_KEY.sub(r"\1***", s))
 
 
 class TokenFilter(logging.Filter):
-    """uvicorn.access übergibt (client, method, full_path, http_version, status) als args."""
+    """uvicorn.access übergibt (client, method, full_path, http_version, status) als args, httpx die URL als Objekt."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.args, tuple):
-            record.args = tuple(mask_tokens(a) if isinstance(a, str) else a for a in record.args)
+            record.args = tuple(mask_tokens(str(a)) if isinstance(a, str) or type(a).__name__ == "URL" else a for a in record.args)
         elif isinstance(record.msg, str):
             record.msg = mask_tokens(record.msg)
         return True
@@ -180,3 +184,4 @@ class TokenFilter(logging.Filter):
 
 def install_log_filter() -> None:
     logging.getLogger("uvicorn.access").addFilter(TokenFilter())
+    logging.getLogger("httpx").addFilter(TokenFilter())
