@@ -6,6 +6,8 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+## 0.7.0 – 2026-11-26
+
 ### Hinweis zur Anbindung der Hosts
 Der Server lässt sich allein aktualisieren – Hosts mit älteren Skripten melden weiter wie bisher. Die neuen Fassungen
 von `hc` und `updates-report` bekommen Hosts auf zwei Wegen:
