@@ -78,7 +78,7 @@ status.example.org {
 }
 ```
 
-The app honours `X-Forwarded-Proto`; cookies are then automatically “Secure”. Publish Healthchecks and Beszel the same way if needed (own subdomains) and set `HC_PUBLIC_URL`/`BESZEL_PUBLIC_URL` to the HTTPS addresses.
+If the proxy runs as a container in the same Compose project, add its name to `TRUSTED_PROXIES` (e.g. `TRUSTED_PROXIES=caddy`; `cloudflared` is already included). The app then honours `X-Forwarded-For`/`X-Forwarded-Proto`, and cookies are automatically “Secure”. From all other senders it ignores these headers – otherwise anyone could claim a false address. If the proxy runs directly on the server (as above), everything works without an entry; the sign-in throttling then counts all proxy users together. Publish Healthchecks and Beszel the same way if needed (own subdomains) and set `HC_PUBLIC_URL`/`BESZEL_PUBLIC_URL` to the HTTPS addresses.
 
 ### Cloudflare Tunnel (profile `tunnel`)
 

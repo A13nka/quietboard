@@ -25,6 +25,12 @@ log = logging.getLogger("status.auth")
 ROLES = ("admin", "viewer")
 SESSION_DAYS = 30
 MIN_PASSWORD = 10
+MAX_PASSWORD = 1024  # scrypt über riesige Eingaben wäre eine billige Last für Angreifer
+FAIL_WINDOW = 900  # Sekunden
+FAIL_PER_CLIENT = 10  # Fehlversuche je Adresse+Konto bzw. je Adresse im Fenster
+FAIL_PER_ACCOUNT = 20  # Fehlversuche je Konto im Fenster, unabhängig von der Adresse
+FAIL_KEYS_MAX = 5000  # Obergrenze der gemerkten Schlüssel (Speicher)
+SETUP_CODE_TRIES = 20  # danach neuer Einrichtungscode
 _SCRYPT = {"n": 2**14, "r": 8, "p": 1}
 _CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # ohne 0/O, 1/I/L
 
@@ -54,13 +60,26 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+_DUMMY_HASH: str | None = None
+
+
+def dummy_hash() -> str:
+    """Einmal berechneter Hash für unbekannte Konten (gleiche Laufzeit wie ein echtes Konto, ohne Mehrarbeit)."""
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = hash_password(secrets.token_urlsafe(16))
+    return _DUMMY_HASH
+
+
 def check_password_rules(password: str) -> None:
-    if len(password) < MIN_PASSWORD:
+    if not isinstance(password, str) or len(password) < MIN_PASSWORD:
         raise AuthError(f"Passwort zu kurz (mindestens {MIN_PASSWORD} Zeichen)")
+    if len(password) > MAX_PASSWORD:
+        raise AuthError(f"Passwort zu lang (höchstens {MAX_PASSWORD} Zeichen)")
 
 
 def normalize_email(email: str) -> str:
-    email = (email or "").strip().lower()
+    email = (email if isinstance(email, str) else "").strip().lower()
     if "@" not in email or email.startswith("@") or email.endswith("@") or len(email) > 254:
         raise AuthError("Ungültige E-Mail-Adresse")
     return email
@@ -95,7 +114,9 @@ class Store:
         except OSError:
             pass
         self.setup_code: str | None = None
+        self._setup_tries = 0
         self._failures: dict[str, list[float]] = {}
+        self._fail_lock = threading.Lock()
 
     # ------------------------------------------------------------ Hilfen
     def _q(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
@@ -125,10 +146,14 @@ class Store:
     def complete_setup(self, code: str, email: str, password: str, name: str = "") -> dict:
         if self.has_users():
             raise AuthError("Bereits eingerichtet – bitte anmelden")
-        given = (code or "").strip().upper().replace(" ", "")
+        given = (code if isinstance(code, str) else "")[:20].strip().upper().replace(" ", "")
         if len(given) == 8:
             given = f"{given[:4]}-{given[4:]}"
-        if not (self.setup_code and hmac.compare_digest(given, self.setup_code)):
+        if not (self.setup_code and hmac.compare_digest(given.encode(), self.setup_code.encode())):
+            self._setup_tries += 1
+            if self._setup_tries >= SETUP_CODE_TRIES:  # Raten zwecklos machen: neuer Code ins Log
+                self._setup_tries, self.setup_code = 0, None
+                self.ensure_setup_code()
             raise AuthError("Einrichtungscode falsch – er steht im Log: docker compose logs status")
         user = self.create_user(email, password, "admin", name)
         self.setup_code = None
@@ -179,12 +204,15 @@ class Store:
         self._x("UPDATE users SET role=? WHERE id=?", (role, uid))
         return self.get_user(uid)
 
-    def change_password(self, uid: int, old: str, new: str) -> None:
+    def change_password(self, uid: int, old: str, new: str, keep_session: str | None = None) -> None:
+        """Eigenes Passwort ändern. Alle anderen Sitzungen enden (die aktuelle bleibt)."""
         rows = self._q("SELECT pw_hash FROM users WHERE id=?", (uid,))
-        if not rows or not verify_password(old, rows[0]["pw_hash"]):
+        if not isinstance(old, str) or len(old) > MAX_PASSWORD or not rows or not verify_password(old, rows[0]["pw_hash"]):
             raise AuthError("Bisheriges Passwort falsch")
         check_password_rules(new)
         self._x("UPDATE users SET pw_hash=? WHERE id=?", (hash_password(new), uid))
+        keep = _token_hash(keep_session) if keep_session else ""
+        self._x("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", (uid, keep))
 
     def set_password(self, uid: int, new: str) -> None:
         """Admin setzt ein Passwort zurück (oder CLI)."""
@@ -193,25 +221,49 @@ class Store:
         self._x("DELETE FROM sessions WHERE user_id=?", (uid,))
 
     # ------------------------------------------------------------ Anmeldung
-    def _limited(self, key: str) -> bool:
-        now = time.time()
-        recent = [t for t in self._failures.get(key, []) if now - t < 900]
-        self._failures[key] = recent
-        return len(recent) >= 10
+    def _count(self, key: str, now: float) -> int:
+        """Fehlversuche im Fenster. Legt nichts an (nur echte Fehlversuche werden gemerkt)."""
+        recent = [t for t in self._failures.get(key, ()) if now - t < FAIL_WINDOW]
+        if recent:
+            self._failures[key] = recent
+        else:
+            self._failures.pop(key, None)
+        return len(recent)
+
+    def _note_failure(self, keys: tuple[str, ...], now: float) -> None:
+        room = max(0, FAIL_KEYS_MAX - len(keys))
+        if len(self._failures) > room:  # abgelaufene wegräumen, notfalls die ältesten
+            for k in [k for k, ts in self._failures.items() if not ts or now - ts[-1] >= FAIL_WINDOW]:
+                del self._failures[k]
+            while len(self._failures) > room:
+                del self._failures[min(self._failures, key=lambda k: self._failures[k][-1])]
+        for k in keys:
+            self._failures.setdefault(k, []).append(now)
 
     def login(self, email: str, password: str, client: str = "") -> dict:
-        key = f"{client}|{(email or '').strip().lower()}"
-        if self._limited(key) or self._limited(client):
-            raise AuthError("Zu viele Fehlversuche – in 15 Minuten erneut versuchen")
-        rows = self._q("SELECT id, pw_hash FROM users WHERE email=?", ((email or "").strip().lower(),))
-        ok = bool(rows) and verify_password(password or "", rows[0]["pw_hash"])
-        if not rows:
-            verify_password(password or "", hash_password("dummy-password"))  # gleiche Laufzeit wie bei echtem Konto
-        if not ok:
-            self._failures.setdefault(key, []).append(time.time())
-            self._failures.setdefault(client, []).append(time.time())
+        email = (email if isinstance(email, str) else "").strip().lower()
+        password = password if isinstance(password, str) else ""
+        if len(email) > 254 or len(password) > MAX_PASSWORD:
             raise AuthError("E-Mail oder Passwort falsch")
-        self._failures.pop(key, None)
+        keys = (f"c|{client}|{email}", f"c|{client}", f"a|{email}")
+        now = time.time()
+        with self._fail_lock:
+            limited = (
+                self._count(keys[0], now) >= FAIL_PER_CLIENT
+                or self._count(keys[1], now) >= FAIL_PER_CLIENT
+                or self._count(keys[2], now) >= FAIL_PER_ACCOUNT
+            )
+        if limited:
+            raise AuthError("Zu viele Fehlversuche – in 15 Minuten erneut versuchen")
+        rows = self._q("SELECT id, pw_hash FROM users WHERE email=?", (email,))
+        # Unbekanntes Konto: gleich teure Prüfung gegen einen festen Hash (keine Rückschlüsse über die Laufzeit)
+        ok = verify_password(password, rows[0]["pw_hash"] if rows else dummy_hash()) and bool(rows)
+        if not ok:
+            with self._fail_lock:
+                self._note_failure(keys, now)
+            raise AuthError("E-Mail oder Passwort falsch")
+        with self._fail_lock:
+            self._failures.pop(keys[0], None)
         return self.get_user(rows[0]["id"])
 
     def create_session(self, uid: int, ua: str = "") -> str:

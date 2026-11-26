@@ -19,7 +19,7 @@ The code is valid until the first account exists; after a restart there is a new
 | **Admin** | everything: add hosts, users, settings, jobs, pause checks, test the morning digest |
 | **Viewer** | see everything, change their own password, push on their own devices |
 
-Create users under **System → Users**. Passwords: at least 10 characters, stored with scrypt. After 10 failed attempts sign-in is blocked for 15 minutes. Sessions last 30 days.
+Create users under **System → Users**. Passwords: at least 10 characters, stored with scrypt. After 10 failed attempts from one address (or 20 for one account in total) sign-in is blocked for 15 minutes. Changing your password signs you out on all other devices. Sessions last 30 days.
 
 Healthchecks and Beszel have their own admin logins: `ADMIN_EMAIL` and `ADMIN_PASSWORD` from `.env`.
 

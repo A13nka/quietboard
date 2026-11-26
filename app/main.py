@@ -11,6 +11,7 @@ import asyncio
 import base64
 import contextlib
 import datetime as dt
+import hmac
 import ipaddress
 import json
 import logging
@@ -28,11 +29,11 @@ from zoneinfo import ZoneInfo
 import httpx
 import jwt
 import yaml
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, bootstrap, config, i18n, push
+from . import auth, bootstrap, config, i18n, push, security
 from . import jobs as jobs_mod
 from .i18n import tr
 
@@ -125,7 +126,7 @@ push_state: dict = _load("push_state.json", {})  # check-uuid -> letzter Status
 last_sent: dict[str, float] = {}
 
 state: dict = {"generated": None, "checks": [], "hosts": [], "pbs": {}, "errors": {}}
-cfg: dict = {}
+cfg: dict = {"settings": {}, "hosts": {}, "checks": []}  # bis checks.yaml geladen ist (oder wenn sie fehlerhaft ist)
 
 
 def now() -> dt.datetime:
@@ -413,6 +414,7 @@ async def refresh() -> None:
     _last_refresh = time.monotonic()
     try:
         cfg = config.load()
+        state["errors"].pop("checks.yaml", None)  # repariert → Warnung weg
     except Exception as exc:
         state["errors"]["checks.yaml"] = str(exc)
     if DEMO:
@@ -649,18 +651,34 @@ async def lifespan(_app: FastAPI):
         t.cancel()
 
 
-app = FastAPI(title="Status", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
-
-
-# ---------------------------------------------------------------- Zugriffsschutz
-_jwk = jwt.PyJWKClient(f"https://{ACCESS_TEAM}.cloudflareaccess.com/cdn-cgi/access/certs") if ACCESS_TEAM else None
-
-
 SESSION_COOKIE = "qb_session"
 # Ohne Anmeldung erreichbar: Gesundheitsprüfung, Ingest/Installer (eigener Token), Anmeldeseiten und statische Dateien
 PUBLIC_PATHS = ("/healthz", "/login", "/setup", "/sw.js", "/manifest.webmanifest", "/api/auth/state", "/api/auth/login", "/api/auth/setup")
 PUBLIC_PREFIXES = ("/api/ingest/", "/api/install/", "/static/")
 UNSAFE = ("POST", "PUT", "PATCH", "DELETE")
+
+
+def _is_public(path: str) -> bool:
+    return path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES)
+
+
+def _route_guard(request: Request) -> None:
+    """Zweite Verteidigungslinie je Route: entscheidet nach der Route, die der Router tatsächlich gewählt hat –
+    unabhängig davon, was die Middleware gesehen hat. Nicht öffentliche Routen brauchen einen angemeldeten Benutzer."""
+    route = request.scope.get("route")
+    if _is_public(getattr(route, "path", "")):
+        return
+    if not getattr(request.state, "user", None):
+        raise HTTPException(401, "Anmeldung erforderlich")
+
+
+app = FastAPI(title="Status", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan, dependencies=[Depends(_route_guard)])
+
+
+# ---------------------------------------------------------------- Zugriffsschutz
+_jwk = jwt.PyJWKClient(f"https://{ACCESS_TEAM}.cloudflareaccess.com/cdn-cgi/access/certs") if ACCESS_TEAM else None
+# Zusätzliche Adressen, unter denen die Oberfläche aufgerufen wird (nur nötig, wenn ein Proxy den Host-Header ändert)
+PUBLIC_ORIGIN_HOSTS = {urlparse(o.strip()).netloc for o in E("PUBLIC_ORIGINS", "").split(",") if o.strip()}
 
 
 def _access_user(request: Request) -> dict | None:
@@ -678,19 +696,32 @@ def _access_user(request: Request) -> dict | None:
 
 
 def _same_origin(request: Request) -> bool:
-    """Schutz gegen fremde Seiten, die im Namen des Browsers schreiben (CSRF)."""
-    host = request.headers.get("host", "")
+    """Schutz gegen fremde Seiten, die im Namen des Browsers schreiben (CSRF).
+
+    Sec-Fetch-Site setzt der Browser selbst (fremde Seiten können es nicht fälschen) – das gilt zuerst und funktioniert
+    auch hinter Proxys, die den Host-Header ändern. Ältere Browser: Origin/Referer gegen Host (bzw. X-Forwarded-Host
+    eines vertrauten Proxys oder PUBLIC_ORIGINS). Ganz ohne Herkunftsangabe: ablehnen."""
+    sfs = request.headers.get("sec-fetch-site")
+    if sfs:
+        return sfs in ("same-origin", "none")
     origin = request.headers.get("origin") or request.headers.get("referer")
-    if origin:
-        return urlparse(origin).netloc == host
-    return request.headers.get("sec-fetch-site", "same-origin") in ("same-origin", "none")
+    if not origin:
+        return False
+    allowed = {request.headers.get("host", ""), request.scope.get("qb_forwarded_host", "")} | PUBLIC_ORIGIN_HOSTS
+    return urlparse(origin).netloc in allowed - {""}
+
+
+def _has_body(request: Request) -> bool:
+    return request.headers.get("content-length", "0") not in ("", "0") or "transfer-encoding" in request.headers
 
 
 @app.middleware("http")
 async def access_guard(request: Request, call_next):
-    path = request.url.path
+    # Nicht request.url.path: die URL setzt Starlette aus dem Host-Header zusammen – ein Header wie
+    # "Host: x/healthz?" ließe den Wächter einen öffentlichen Pfad sehen. scope["path"] ist, was der Router bedient.
+    path = request.scope["path"]
     request.state.user = None
-    if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
+    if _is_public(path):
         return await call_next(request)
     if ALLOW_NO_AUTH:
         request.state.user = {"id": 0, "email": "ohne-anmeldung", "name": "", "role": "admin", "via": "none"}
@@ -703,14 +734,32 @@ async def access_guard(request: Request, call_next):
             return JSONResponse({"detail": "API-Token ungültig oder widerrufen"}, status_code=401)
     if user is None:
         user = STORE.session_user(request.cookies.get(SESSION_COOKIE))
-        if user and request.method in UNSAFE and not _same_origin(request):
-            return JSONResponse({"detail": "Anfrage von fremder Seite abgelehnt"}, status_code=403)
     if user is None:
         if request.method == "GET" and not path.startswith("/api/"):
             return RedirectResponse("/setup" if not STORE.has_users() else "/login", status_code=303)
         return JSONResponse({"detail": "Anmeldung erforderlich", "setup": not STORE.has_users()}, status_code=401)
+    # Sitzungs-Cookie und Cloudflare Access schickt der Browser von selbst mit – auch für fremde Seiten. Deshalb für
+    # schreibende Anfragen Herkunft prüfen und nur JSON annehmen (ein Formular einer fremden Seite kann kein JSON senden).
+    if user.get("via") != "token" and request.method in UNSAFE:
+        if not _same_origin(request):
+            log.warning(
+                "Schreibende Anfrage abgelehnt (Herkunft): %s %s, Origin=%s, Host=%s, Sec-Fetch-Site=%s",
+                request.method,
+                path,
+                request.headers.get("origin", "-"),
+                request.headers.get("host", "-"),
+                request.headers.get("sec-fetch-site", "-"),
+            )
+            return JSONResponse({"detail": "Anfrage von fremder Seite abgelehnt"}, status_code=403)
+        if _has_body(request) and not request.headers.get("content-type", "").startswith("application/json"):
+            return JSONResponse({"detail": "Nur JSON erlaubt"}, status_code=415)
     request.state.user = user
     return await call_next(request)
+
+
+# Vor allem anderen (äußerste Schicht): vertraute Proxys, Größenlimit, Sicherheits-Header
+app.add_middleware(security.ShieldMiddleware, trusted=security.TrustedProxies(E("TRUSTED_PROXIES", "cloudflared")))
+security.install_log_filter()
 
 
 def require_admin(request: Request) -> dict:
@@ -722,13 +771,21 @@ def require_admin(request: Request) -> dict:
 
 def require_token(request: Request) -> None:
     # Token per Bearer-Header, X-Token-Header oder ?token= (für Absender ohne eigene Header, z. B. Bridges)
-    candidates = {
+    candidates = (
         request.headers.get("authorization", "").removeprefix("Bearer ").strip(),
         request.headers.get("x-token", ""),
         request.query_params.get("token", ""),
-    }
-    if not INGEST_TOKEN or INGEST_TOKEN not in candidates:
+    )
+    if not _token_ok(*candidates):
         raise HTTPException(401, "Token fehlt oder falsch")
+
+
+def _token_ok(*given: str) -> bool:
+    """Zeitkonstanter Vergleich mit dem Ingest-Token (jeder Kandidat wird geprüft)."""
+    if not INGEST_TOKEN:
+        return False
+    want = INGEST_TOKEN.encode()
+    return any([hmac.compare_digest(g.encode(), want) for g in given if g])
 
 
 def _resolve(host: str) -> set[str]:
@@ -740,8 +797,9 @@ def _resolve(host: str) -> set[str]:
 
 def require_beszel(request: Request) -> None:
     """Beszel-Webhook: nur vom Beszel-Container (per Namensauflösung), aus INTERNAL_NETS oder mit Ingest-Token.
-    Ein pauschales "privates Netz" reicht nicht – sonst dürfte jedes Gerät im LAN Meldungen einspielen."""
-    client = request.client.host if request.client else ""
+    Ein pauschales "privates Netz" reicht nicht – sonst dürfte jedes Gerät im LAN Meldungen einspielen.
+    Geprüft wird die echte Gegenstelle der Verbindung, nie eine weitergeleitete Adresse (X-Forwarded-For)."""
+    client = request.scope.get("qb_peer") or (request.client.host if request.client else "")
     if client and client in _resolve(BESZEL_HOST):
         return
     try:
@@ -947,7 +1005,12 @@ async def ingest_pve(request: Request, source: str = "pve", host: str = "pve"):
     try:
         b = await request.json()
     except Exception:
-        b = {"severity": "unknown", "title": "unlesbares Event", "message": (await request.body()).decode(errors="replace")}
+        # Kein gültiges JSON (z. B. bei sehr langem Log gekürzt): Schweregrad und Titel aus dem Text lesen,
+        # damit ein Fehler trotzdem als Fehler gilt.
+        raw = (await request.body()).decode(errors="replace")
+        sev = re.search(r'"severity"\s*:\s*"(\w+)"', raw)
+        ttl = re.search(r'"title"\s*:\s*"([^"]{1,200})"', raw)
+        b = {"severity": sev.group(1) if sev else "unknown", "title": ttl.group(1) if ttl else "unlesbares Event", "message": raw}
     severity = str(b.get("severity", "info")).lower()
     fields = b.get("fields") or {}
     title, message = str(b.get("title", "")), str(b.get("message", ""))
@@ -968,9 +1031,9 @@ async def ingest_pve(request: Request, source: str = "pve", host: str = "pve"):
         asyncio.get_running_loop().call_later(2, lambda: asyncio.create_task(refresh()))  # Job-Status gleich anzeigen
     else:
         # Unbekanntes Event: nie still verschlucken, wenn es ein Fehler ist
-        prio = "normal" if failed else "info"
+        prio = "normal" if failed or severity == "unknown" else "info"
         add_event(source, tr("{host}: {title} (ohne Check)", host=host, title=title), message, prio)
-        if failed:
+        if failed or severity == "unknown":
             await send_signal(
                 f"🔴 {host}: {title}\n(" + tr("kein passender Job – unter Jobs anlegen") + ")", dedup_key=f"pve:{host}:{title}"
             )
@@ -1019,7 +1082,7 @@ async def ingest_notify(request: Request):
 async def ingest_signal_compat(token: str, request: Request):
     """Drop-in für Absender, die signal-api erwarten (z. B. dockhand-signal-bridge).
     SIGNAL_API_URL=http://<server>:8088/api/ingest/signal/<INGEST_TOKEN>  (Bridge hängt /v2/send an)."""
-    if not INGEST_TOKEN or token != INGEST_TOKEN:
+    if not _token_ok(token):
         raise HTTPException(401, "Token fehlt oder falsch")
     try:
         b = await request.json()
@@ -1069,7 +1132,8 @@ async def push_unsubscribe(request: Request):
 
 
 @app.post("/api/push/test")
-async def push_test():
+async def push_test(request: Request):
+    require_admin(request)
     return {"sent": await push_all("🔔 Test", tr("Mitteilungen von QuietBoard funktionieren."), "/", "test"), "devices": len(push_subs)}
 
 
@@ -1097,6 +1161,16 @@ def _public_user(u: dict | None) -> dict | None:
     return {k: u.get(k) for k in ("id", "email", "name", "role", "via")} if u else None
 
 
+# Passwort-Hashing (scrypt, 16 MB je Lauf) nicht in der Event-Loop und höchstens zweimal gleichzeitig –
+# sonst legen ein paar Login-Versuche die ganze App lahm bzw. sprengen mem_limit.
+_SCRYPT_SLOTS = asyncio.Semaphore(2)
+
+
+async def _hashing(fn, *args):
+    async with _SCRYPT_SLOTS:
+        return await asyncio.to_thread(fn, *args)
+
+
 async def _body(request: Request) -> dict:
     try:
         b = await request.json()
@@ -1119,7 +1193,10 @@ async def auth_state(request: Request):
 async def auth_setup(request: Request):
     b = await _body(request)
     try:
-        user = STORE.complete_setup(b.get("code", ""), b.get("email", ""), b.get("password", ""), b.get("name", ""))
+        name = b.get("name", "")
+        user = await _hashing(
+            STORE.complete_setup, b.get("code", ""), b.get("email", ""), b.get("password", ""), name if isinstance(name, str) else ""
+        )
     except auth.AuthError as exc:
         raise HTTPException(400, str(exc)) from None
     if b.get("email") and not STORE.get_setting("mail_to"):
@@ -1133,7 +1210,7 @@ async def auth_setup(request: Request):
 async def auth_login(request: Request):
     b = await _body(request)
     try:
-        user = STORE.login(b.get("email", ""), b.get("password", ""), request.client.host if request.client else "")
+        user = await _hashing(STORE.login, b.get("email", ""), b.get("password", ""), request.client.host if request.client else "")
     except auth.AuthError as exc:
         raise HTTPException(401, str(exc)) from None
     resp = JSONResponse({"ok": True, "user": _public_user(user)})
@@ -1156,7 +1233,7 @@ async def auth_password(request: Request):
         raise HTTPException(400, "Dieses Konto wird außerhalb von QuietBoard verwaltet")
     b = await _body(request)
     try:
-        STORE.change_password(user["id"], b.get("old", ""), b.get("new", ""))
+        await _hashing(STORE.change_password, user["id"], b.get("old", ""), b.get("new", ""), request.cookies.get(SESSION_COOKIE))
     except auth.AuthError as exc:
         raise HTTPException(400, str(exc)) from None
     return {"ok": True}
@@ -1173,7 +1250,11 @@ async def users_create(request: Request):
     require_admin(request)
     b = await _body(request)
     try:
-        return {"user": STORE.create_user(b.get("email", ""), b.get("password", ""), b.get("role", "viewer"), b.get("name", ""))}
+        name = b.get("name", "")
+        user = await _hashing(
+            STORE.create_user, b.get("email", ""), b.get("password", ""), b.get("role", "viewer"), name if isinstance(name, str) else ""
+        )
+        return {"user": user}
     except auth.AuthError as exc:
         raise HTTPException(400, str(exc)) from None
 
@@ -1184,7 +1265,7 @@ async def users_update(uid: int, request: Request):
     b = await _body(request)
     try:
         if "password" in b:
-            STORE.set_password(uid, b["password"])
+            await _hashing(STORE.set_password, uid, b["password"])
         if "role" in b:
             STORE.set_role(uid, b["role"], me.get("id", 0))
     except auth.AuthError as exc:
@@ -1277,10 +1358,10 @@ async def settings_put(request: Request):
 @app.post("/api/notify/test")
 async def notify_test(request: Request):
     b = await _body(request)
+    require_admin(request)
     channel = b.get("channel")
     if channel == "push":
         return {"ok": bool(await push_all("🔔 Test", tr("Mitteilungen von QuietBoard funktionieren."), "/", "test"))}
-    require_admin(request)
     if channel == "mail":
         if not SMTP["host"]:
             raise HTTPException(400, "Kein SMTP-Server in .env (SMTP_HOST)")

@@ -19,7 +19,7 @@ Der Code gilt, bis das erste Konto existiert; nach einem Neustart gibt es einen 
 | **Admin** | alles: Hosts anbinden, Benutzer, Einstellungen, Checks pausieren, Morgenmeldung testen |
 | **Betrachter** | alles sehen, eigenes Passwort ändern, Push auf eigenen Geräten |
 
-Benutzer anlegen unter **System → Benutzer**. Passwörter: mindestens 10 Zeichen, gespeichert mit scrypt. Nach 10 Fehlversuchen ist die Anmeldung für 15 Minuten gesperrt. Sitzungen gelten 30 Tage.
+Benutzer anlegen unter **System → Benutzer**. Passwörter: mindestens 10 Zeichen, gespeichert mit scrypt. Nach 10 Fehlversuchen von einer Adresse (bzw. 20 für ein Konto insgesamt) ist die Anmeldung für 15 Minuten gesperrt. Wer sein Passwort ändert, wird auf allen anderen Geräten abgemeldet. Sitzungen gelten 30 Tage.
 
 Healthchecks und Beszel haben eigene Admin-Zugänge: `ADMIN_EMAIL` und `ADMIN_PASSWORD` aus `.env`.
 

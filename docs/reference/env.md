@@ -39,6 +39,8 @@
 | `SIGNAL_NUMBER`, `SIGNAL_RECIPIENT` | Signal (Profil `signal`) |
 | `TUNNEL_TOKEN` | Cloudflare Tunnel (Profil `tunnel`) |
 | `ACCESS_TEAM`, `ACCESS_AUD` | Cloudflare Access als Anmeldung |
+| `TRUSTED_PROXIES` | Proxys, deren weitergeleitete Header (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) gelten: Containernamen und/oder Netze, Komma-getrennt (Standard `cloudflared`). Von allen anderen werden diese Header ignoriert |
+| `PUBLIC_ORIGINS` | nur nötig, wenn ein Proxy den `Host`-Header ändert: Adressen der Oberfläche, z. B. `https://status.example.org` |
 | `HC_API_KEY`, `HC_PING_KEY`, `BESZEL_APP_USER`, `BESZEL_APP_PASS` | bestehende Healthchecks/Beszel statt Selbsteinrichtung |
 | `STATUS_IMAGE` | ganz anderes Image (z. B. lokal gebaut) |
 | `DEMO` | Beispieldaten statt echter Motoren |
