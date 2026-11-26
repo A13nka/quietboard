@@ -37,8 +37,11 @@ case "${1:-}" in
     rid=$(cat /proc/sys/kernel/random/uuid)
     out=$(mktemp); trap 'rm -f "$out" "$out.t"' EXIT
     send "$slug" "start?rid=$rid"
+    t0=$(date +%s)
     "$@" 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
     tail -c 20000 "$out" > "$out.t"
+    # Abschlusszeile: QuietBoard nennt den Exitcode in der Meldung (Healthchecks gibt ihn nicht heraus)
+    printf '\n[hc] exit %s, %ss\n' "$rc" "$(( $(date +%s) - t0 ))" >> "$out.t"
     send "$slug" "$rc?rid=$rid" "$out.t"
     exit "$rc"
     ;;

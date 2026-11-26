@@ -32,16 +32,57 @@ def tag_string(tags: dict) -> str:
     return " ".join(f"{k}:{v}" for k, v in tags.items())
 
 
+def _hhmm(value) -> str:
+    """digest_time: "07:30" bleibt; YAML liest 10:30 ohne Anführungszeichen als Zahl 630 (Minuten)."""
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 24 * 60:
+        return f"{value // 60:02d}:{value % 60:02d}"
+    return str(value)
+
+
 def load() -> dict:
+    """checks.yaml lesen. Einzelne fehlerhafte Einträge werden übersprungen und in cfg["_problems"] gemeldet,
+    statt die ganze Datei (und damit jeden Abruf) scheitern zu lassen."""
     with CHECKS_FILE.open(encoding="utf-8") as fh:
-        cfg = yaml.safe_load(fh) or {}
-    cfg.setdefault("settings", {})
-    cfg.setdefault("hosts", {})
-    cfg.setdefault("checks", [])
-    for c in cfg["checks"]:
+        raw = yaml.safe_load(fh) or {}
+    if not isinstance(raw, dict):
+        raise ValueError("checks.yaml: oberste Ebene muss settings/hosts/checks enthalten")
+    problems: list[str] = []
+
+    def section(name: str, kind: type, default):
+        v = raw.get(name)
+        if v is None:
+            return default
+        if not isinstance(v, kind):
+            problems.append(f"{name}: falscher Typ, ignoriert")
+            return default
+        return v
+
+    cfg: dict = {k: v for k, v in raw.items() if k not in ("settings", "hosts", "checks", "watch_images")}
+    cfg["settings"] = section("settings", dict, {})
+    if "digest_time" in cfg["settings"]:
+        cfg["settings"]["digest_time"] = _hhmm(cfg["settings"]["digest_time"])
+    cfg["hosts"] = {str(k): (v if isinstance(v, dict) else {}) for k, v in section("hosts", dict, {}).items()}
+    cfg["checks"] = []
+    for i, c in enumerate(section("checks", list, [])):
+        if not isinstance(c, dict) or not c.get("name"):
+            problems.append(f"checks[{i}]: ohne name, ignoriert")
+            continue
+        c["name"] = str(c["name"])
         c["slug"] = slug(c["name"])
-        c.setdefault("tags", {})
-        c["prio"] = c["tags"].get("prio", "normal")
+        if not isinstance(c.get("tags"), dict):
+            c["tags"] = {}
+        c["prio"] = str(c["tags"].get("prio", "normal"))
+        if c.get("match") is not None and not isinstance(c["match"], dict):
+            problems.append(f"{c['name']}: match ignoriert (kein Block)")
+            c["match"] = None
+        cfg["checks"].append(c)
+    cfg["watch_images"] = []
+    for i, w in enumerate(section("watch_images", list, [])):
+        if isinstance(w, dict) and isinstance(w.get("image"), str) and ":" in w["image"]:
+            cfg["watch_images"].append(w)
+        else:
+            problems.append(f"watch_images[{i}]: braucht image: name:tag, ignoriert")
+    cfg["_problems"] = problems
     return cfg
 
 

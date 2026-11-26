@@ -88,7 +88,7 @@ async def _auth(cli: httpx.AsyncClient, collection: str, email: str, password: s
 
 
 async def _find_user(cli: httpx.AsyncClient, headers: dict, email: str) -> dict | None:
-    r = await cli.get("/api/collections/users/records", params={"filter": f"email='{email}'", "perPage": 1}, headers=headers)
+    r = await cli.get("/api/collections/users/records", params={"filter": f"email={json.dumps(email)}", "perPage": 1}, headers=headers)
     r.raise_for_status()
     items = r.json().get("items", [])
     return items[0] if items else None
@@ -103,6 +103,37 @@ async def _ensure_user(cli: httpx.AsyncClient, headers: dict, email: str, passwo
         r = await cli.patch(f"/api/collections/users/records/{user['id']}", json=body, headers=headers)
     r.raise_for_status()
     return r.json()
+
+
+async def _agent_creds(cli: httpx.AsyncClient, headers: dict, admin_id: str, admin_email: str, admin_password: str) -> tuple[str, str]:
+    """Universal-Token für Agents (vorhandenen nehmen, sonst anlegen) und öffentlichen Schlüssel des Hubs."""
+    r = await cli.get(
+        "/api/collections/universal_tokens/records", params={"filter": f"user={json.dumps(admin_id)}", "perPage": 1}, headers=headers
+    )
+    r.raise_for_status()
+    items = r.json().get("items", [])
+    if items:
+        token = items[0]["token"]
+    else:
+        token = secrets.token_urlsafe(32)
+        r = await cli.post("/api/collections/universal_tokens/records", json={"user": admin_id, "token": token}, headers=headers)
+        r.raise_for_status()
+    user_auth = await _auth(cli, "users", admin_email, admin_password)
+    r = await cli.get("/api/beszel/getkey", headers={"Authorization": user_auth["token"]})
+    r.raise_for_status()
+    return token, r.json()["key"]
+
+
+async def fetch_agent_creds(base_url: str, admin_email: str, admin_password: str) -> tuple[str, str]:
+    """Nur Agent-Token und Hub-Schlüssel holen – für Installationen, deren App-Zugang aus der Umgebung kommt
+    (BESZEL_USER/BESZEL_PASS). Ändert keine Benutzer und Passwörter."""
+    async with httpx.AsyncClient(base_url=base_url, timeout=15) as cli:
+        su = await _auth(cli, "_superusers", admin_email, admin_password)
+        headers = {"Authorization": su["token"]}
+        admin = await _find_user(cli, headers, admin_email)
+        if not admin:
+            raise RuntimeError("Beszel-Admin fehlt")
+        return await _agent_creds(cli, headers, admin["id"], admin_email, admin_password)
 
 
 async def setup_beszel(base_url: str, admin_email: str, admin_password: str, client: httpx.AsyncClient | None = None) -> dict:
@@ -127,22 +158,7 @@ async def setup_beszel(base_url: str, admin_email: str, admin_password: str, cli
         app_pass = secrets.token_urlsafe(24)
         await _ensure_user(cli, headers, app_email, app_pass, "readonly")
 
-        r = await cli.get(
-            "/api/collections/universal_tokens/records", params={"filter": f"user='{admin['id']}'", "perPage": 1}, headers=headers
-        )
-        r.raise_for_status()
-        items = r.json().get("items", [])
-        if items:
-            token = items[0]["token"]
-        else:
-            token = secrets.token_urlsafe(32)
-            r = await cli.post("/api/collections/universal_tokens/records", json={"user": admin["id"], "token": token}, headers=headers)
-            r.raise_for_status()
-
-        user_auth = await _auth(cli, "users", admin_email, admin_password)
-        r = await cli.get("/api/beszel/getkey", headers={"Authorization": user_auth["token"]})
-        r.raise_for_status()
-        hub_key = r.json()["key"]
+        token, hub_key = await _agent_creds(cli, headers, admin["id"], admin_email, admin_password)
 
         result = {"user": app_email, "password": app_pass, "agent_token": token, "hub_key": hub_key}
         _write_private(path, result)
@@ -163,8 +179,18 @@ async def ensure(creds: Credentials, env=os.environ) -> Credentials:
     else:
         creds.errors.pop("healthchecks", None)
 
+    admin_email, admin_password = env.get("ADMIN_EMAIL", ""), env.get("ADMIN_PASSWORD", "")
+    if creds.beszel_ready and not (creds.agent_token and creds.hub_key) and admin_email and admin_password:
+        # App-Zugang aus der Umgebung: „Host hinzufügen“ braucht trotzdem Agent-Token und Hub-Schlüssel
+        try:
+            creds.agent_token, creds.hub_key = await fetch_agent_creds(
+                env.get("BESZEL_URL", "http://beszel:8090").rstrip("/"), admin_email, admin_password
+            )
+            data = _read_json(DATA / "beszel.json")
+            _write_private(DATA / "beszel.json", {**data, "agent_token": creds.agent_token, "hub_key": creds.hub_key})
+        except Exception as exc:
+            log.warning("Beszel: Agent-Token nicht abrufbar: %s", exc)
     if not creds.beszel_ready:
-        admin_email, admin_password = env.get("ADMIN_EMAIL", ""), env.get("ADMIN_PASSWORD", "")
         if not (admin_email and admin_password):
             creds.errors["beszel"] = "nicht konfiguriert (ADMIN_EMAIL/ADMIN_PASSWORD fehlen)"
             return creds
@@ -268,7 +294,6 @@ def alerts_done() -> set[str]:
 
 def mark_alerts_done(ids: set[str]) -> None:
     path = DATA / "beszel.json"
-    data = _read_json(path)
-    if data:
-        data["alerts_for"] = sorted(set(data.get("alerts_for", [])) | ids)
-        _write_private(path, data)
+    data = _read_json(path)  # auch ohne beszel.json (App-Zugang aus der Umgebung) merken – sonst jedes Mal von vorn
+    data["alerts_for"] = sorted(set(data.get("alerts_for", [])) | ids)
+    _write_private(path, data)

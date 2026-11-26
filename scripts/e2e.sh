@@ -134,6 +134,19 @@ expect "Test-Mail senden" curl -fsS -o /dev/null "${H[@]}" -d '{"channel":"mail"
 expect "Morgenmeldung senden" curl -fsS -o /dev/null "${H[@]}" -X POST "$S/api/digest/test"
 wait_until "Beide Mails bei ops@example.org angekommen" 20 sh -c "curl -fsS http://127.0.0.1:$MAILPIT_PORT/api/v1/messages | python3 -c \"import json,sys; m=json.load(sys.stdin)['messages']; sys.exit(not (len(m) >= 2 and all(x['To'][0]['Address']=='ops@example.org' for x in m)))\""
 
+echo "== Job-Alarme über QuietBoard: Lebenszeichen, Ausfall und Entwarnung per Mail"
+expect "Neue Installation: Job-Alarme über QuietBoard" sh -c "curl -fsS -b '$JAR' '$S/api/settings' | grep -q '\"job_alerts\":\"app\"'"
+wait_until "Lebenszeichen quietboard/app angelegt und grün" 30 sh -c "curl -fsS -b '$JAR' '$S/api/system' | python3 -c \"import json,sys; h=json.load(sys.stdin)['heartbeat']; sys.exit(not (h and h['status']=='up'))\""
+expect "Lebenszeichen nicht unter den Jobs" state_ok "not any(c['name']=='quietboard/app' for c in d['checks'])"
+expect "Job e2e/fail anlegen" curl -fsS -o /dev/null "${H[@]}" -d '{"host":"e2e","job":"fail","mode":"period","period":"1d","grace":"1h","prio":"normal"}' "$S/api/checks"
+pk=$("${C[@]}" exec -T status python -c 'import json; print(json.load(open("/bootstrap/healthchecks.json"))["ping_key"])')
+curl -fsS -o /dev/null --data-binary $'sichern …\nFatal: Ziel nicht erreichbar\n[hc] exit 3, 2s' "http://127.0.0.1:$HC_PORT/ping/$pk/e2e-fail/fail"
+mails() { curl -fsS "http://127.0.0.1:$MAILPIT_PORT/api/v1/messages" | python3 -c "import json,sys; m=json.load(sys.stdin)['messages']; sys.exit(not any(\"$1\" in x['Subject'] and \"$2\" in x['Snippet'] for x in m))"; }
+wait_until "Ausfall-Mail mit Exitcode und Logzeile" 30 mails "e2e/fail fehlgeschlagen" "Exitcode 3"
+curl -fsS -o /dev/null "http://127.0.0.1:$HC_PORT/ping/$pk/e2e-fail"
+wait_until "Entwarnungs-Mail" 30 mails "e2e/fail wieder OK" ""
+expect "Export ohne Lebenszeichen" sh -c "! curl -fsS -b '$JAR' '$S/api/config/export' | grep -q 'quietboard/app'"
+
 # Betrachter: sieht alles, darf nichts verwalten
 expect "Betrachter anlegen" curl -fsS -o /dev/null "${H[@]}" -d '{"email":"viewer@example.org","password":"'"$PW"'","role":"viewer"}' "$S/api/users"
 VJAR=$(mktemp)

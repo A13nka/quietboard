@@ -6,6 +6,26 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Neu
+- **Job-Alarme über QuietBoard:** kurze, einheitliche Meldungen über alle Kanäle (Push, Mail, Signal) – „fehlgeschlagen“ mit Exitcode und letzten Logzeilen, „überfällig“ mit letzter Meldung und Zeitplan, „wieder OK“ mit Ausfalldauer. Mehrere Ausfälle eines Abrufs kommen in einer Nachricht. Umschaltbar unter System → Job-Alarme; übernommene Installationen bleiben bei Healthchecks, bis du umstellst (Integrationen werden dabei gesichert und lassen sich wiederherstellen).
+- **Lebenszeichen `quietboard/app`:** QuietBoard meldet sich bei jedem Abruf in Healthchecks; steht die App, meldet Healthchecks das selbst.
+- Meldung, wenn Healthchecks oder Beszel länger als 15 Minuten nicht erreichbar sind; „Braucht Aufmerksamkeit“ und Morgenmeldung zeigen fehlende Quellen statt „alles grün“.
+- `hc run` hängt Exitcode und Dauer ans Log an (für die Meldung). Hosts bekommen die neue Fassung mit dem Befehl aus „Host hinzufügen“.
+- `PUBLIC_URL` für Links in Meldungen.
+
+### Behoben
+- Bearbeiten eines Jobs, Prioritätsänderung und YAML-Import setzten die Integrationen des Jobs in Healthchecks auf „E-Mail“ zurück; eigene Tags ohne Doppelpunkt gingen verloren. Jetzt bleiben sie; bei einer Prioritätsänderung werden nur die von QuietBoard verwalteten Integrationen getauscht. `hc_sync` setzt Kanäle nur noch, wenn `checks.yaml` sie festlegt.
+- Gleiche Meldungen wurden nur nach Titel zusammengefasst: „down → up → down“ innerhalb von 30 Minuten verschluckte den zweiten Ausfall, und gleiche Titel verschiedener Hosts gingen verloren. Fehlgeschlagener Versand blockierte die Wiederholung. Unterdrückung jetzt nach Quelle und Zustand, erst nach erfolgreicher Zustellung, und übersteht Neustarts.
+- Proxmox-Webhook: Nahm Healthchecks den Ping nicht an (Job gelöscht, Slug doppelt), ging die Meldung still verloren – jetzt meldet QuietBoard sie selbst.
+- Meldungen aus eigenen Quellen (`source=nas`, `synology`, `dockhand` …) erscheinen unter „Braucht Aufmerksamkeit“.
+- Neue Jobs, die gleich beim ersten Lauf ausfallen, werden gemeldet.
+- Zwei Jobs mit derselben Ping-Adresse (z. B. `nightly.db` und `nightly-db`) werden abgelehnt.
+- YAML-Import prüft erst alles und schreibt bei einem Fehler nichts; vorhandene Checks mit ungewöhnlichen Namen und OnCalendar-Zeitplänen lassen sich aktualisieren.
+- `checks.yaml`: einzelne fehlerhafte Einträge (`digest_time: 10:30` ohne Anführungszeichen, leerer Host-Eintrag, `watch_images` ohne Image) werden übersprungen und gemeldet, statt Oberfläche oder Morgenmeldung lahmzulegen.
+- Abrufe laufen nicht mehr gleichzeitig (konnte Beszel-Alarme doppelt anlegen).
+- Beszel: ein ungültig gewordener App-Zugang wird neu eingerichtet; mit `BESZEL_APP_USER` funktioniert „Host hinzufügen“.
+- Web Push: zu lange Nachrichten (Emojis) werden nach Bytes gekürzt.
+
 ## 0.5.3 – 2026-11-26
 
 ### Sicherheit

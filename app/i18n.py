@@ -35,6 +35,32 @@ EN = {
     "Mails von QuietBoard kommen an.": "Mail from QuietBoard arrives.",
     "Test von QuietBoard": "Test from QuietBoard",
     "{name} fehlgeschlagen": "{name} failed",
+    # Job-Alarme (app/alerts.py) und Quellen
+    ", Karenz {g}": ", grace {g}",
+    "Exitcode {rc}": "exit code {rc}",
+    "Fehler gemeldet": "failure reported",
+    "Healthchecks hat die Meldung nicht angenommen: {names}": "Healthchecks did not accept the event: {names}",
+    "Keine Meldung seit {t}": "No ping since {t}",
+    "Lauf dauerte {d}": "run took {d}",
+    "Lebenszeichen von QuietBoard. Wird rot, wenn die App nicht mehr läuft.": (
+        "Heartbeat of QuietBoard. Turns red when the app stops running."
+    ),
+    "Lebenszeichen {n} war ausgefallen": "Heartbeat {n} was down",
+    "Letzte Zeilen:": "Last lines:",
+    "War {d} ausgefallen": "Was down for {d}",
+    "Zeitplan {s}": "schedule {s}",
+    "alle {p}": "every {p}",
+    "fehlgeschlagen": "failed",
+    "gestern {t}": "yesterday {t}",
+    "heute {t}": "today {t}",
+    "nie": "never",
+    "{host}: {title} (Job nicht erreichbar)": "{host}: {title} (job not reachable)",
+    "{n} Jobs ausgefallen": "{n} jobs down",
+    "{n} Jobs wieder OK": "{n} jobs OK again",
+    "{q} gestört seit {m} min": "{q} unavailable for {m} min",
+    "{q} nicht erreichbar": "{q} unreachable",
+    "{q} wieder erreichbar": "{q} reachable again",
+    "überfällig": "overdue",
 }
 
 _lang: Callable[[], str] = lambda: os.getenv("LANGUAGE", "de")[:2]  # noqa: E731 – main.py ersetzt das durch die Einstellung

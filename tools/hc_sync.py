@@ -51,9 +51,11 @@ def main() -> int:
                 "tags": config.tag_string(c["tags"]),
                 "desc": c.get("desc", ""),
                 "grace": config.seconds(c.get("grace", "1h")),
-                "channels": ",".join(ids),
                 "unique": ["name"],
             }
+            # Kanäle nur setzen, wenn checks.yaml sie festlegt – sonst blieben bestehende Zuordnungen nicht erhalten
+            if prio_channels:
+                body["channels"] = ",".join(ids)
             if "schedule" in c:
                 body.update(schedule=c["schedule"], tz=tz)
             else:

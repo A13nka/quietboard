@@ -83,9 +83,23 @@ def encrypt(payload: bytes, p256dh_b64: str, auth_b64: str) -> bytes:
     return salt + struct.pack("!IB", 4096, len(as_pub_raw)) + as_pub_raw + ct
 
 
-def request_args(vapid: Vapid, sub: dict, message: dict, ttl: int = 86400, urgency: str = "high") -> dict:
+MAX_PAYLOAD = 3000  # Bytes vor der Verschlüsselung; ein Record fasst 4096, Push-Dienste erlauben ~4 KB
+
+
+def payload(message: dict) -> bytes:
+    """JSON für die Mitteilung, notfalls gekürzt – nach Bytes, nicht nach Zeichen (Emojis/Umlaute zählen mehrfach)."""
     message = {**message, "title": str(message.get("title", ""))[:150], "body": str(message.get("body", ""))[:1500]}
     data = json.dumps(message, ensure_ascii=False).encode()
+    while len(data) > MAX_PAYLOAD and message["body"]:
+        message["body"] = message["body"][: max(0, len(message["body"]) - max(20, (len(data) - MAX_PAYLOAD) // 2))].rstrip() + "…"
+        if len(message["body"]) <= 1:
+            message["body"] = ""
+        data = json.dumps(message, ensure_ascii=False).encode()
+    return data
+
+
+def request_args(vapid: Vapid, sub: dict, message: dict, ttl: int = 86400, urgency: str = "high") -> dict:
+    data = payload(message)
     body = encrypt(data, sub["keys"]["p256dh"], sub["keys"]["auth"])
     headers = {
         **vapid.headers(sub["endpoint"]),
