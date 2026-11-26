@@ -6,6 +6,8 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+## 0.8.0 – 2026-11-26
+
 Nur der Server ändert sich; Hosts brauchen nichts.
 
 ### Behoben
