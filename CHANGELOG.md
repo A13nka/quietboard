@@ -6,6 +6,8 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+## 0.5.3 – 2026-11-26
+
 ### Sicherheit
 - Zugriffsschutz und Anmeldung gehärtet. Allen Installationen wird das Update empfohlen; Details folgen nach dem Release (siehe `SECURITY.md`).
 - Weitergeleitete Header (`X-Forwarded-For`, `X-Forwarded-Proto`) gelten nur noch von vertrauten Proxys (`TRUSTED_PROXIES`, Standard `cloudflared`). Wer einen anderen Reverse-Proxy vor der App betreibt, trägt dessen Containernamen oder Netz dort ein.
