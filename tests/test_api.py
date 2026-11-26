@@ -185,3 +185,69 @@ def test_host_updates_list_each_kind_once(monkeypatch):
     )
     h = next(x for x in main.host_updates() if x["host"] == "d1")
     assert h["kinds"] == ["docker", "apt"] and h["packages"] == 3
+
+
+def test_user_routes_unknown_id_is_404(client):
+    assert client.patch("/api/users/999", json={"role": "viewer"}).status_code == 404
+    assert client.delete("/api/users/999").status_code == 404
+
+
+def test_corrupt_data_file_is_kept_aside(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(main, "DATA", tmp_path)
+    (tmp_path / "events.json").write_text("{kaputt")
+    assert main._load("events.json", []) == []
+    assert not (tmp_path / "events.json").exists()
+    assert list(tmp_path.glob("events.json.kaputt-*"))
+    main._save("events.json", [{"a": 1}])
+    assert main._load("events.json", []) == [{"a": 1}]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{}, {"host": 5}, {"host": "a b"}, {"host": "web01", "items": "x"}, [1, 2], "text"],
+)
+def test_ingest_updates_bad_input_is_400(client, body):
+    assert client.post("/api/ingest/updates", json=body, headers=AUTH).status_code == 400
+
+
+def test_ingest_updates_skips_non_object_items(client):
+    r = client.post("/api/ingest/updates", json={"host": "web01", "items": ["x", {"pkg": "a", "to": "2"}]}, headers=AUTH)
+    assert r.status_code == 200 and r.json()["count"] == 1
+
+
+@pytest.mark.parametrize("path", ["/api/ingest/notify", "/api/ingest/pve", "/api/ingest/signal/test-token"])
+@pytest.mark.parametrize("body", [[1, 2], "nur text", 42])
+def test_ingest_odd_bodies_do_not_crash(client, path, body):
+    assert client.post(path, json=body, headers=AUTH).status_code == 200
+
+
+def test_push_subscribe_bad_body_is_400(client):
+    assert client.post("/api/push/subscribe", json=[1]).status_code == 400
+    assert client.post("/api/push/subscribe", json={"endpoint": 5}).status_code == 400
+
+
+def test_push_subscriptions_limited_per_account(client, monkeypatch):
+    monkeypatch.setattr(main.push, "valid_subscription", lambda sub: True)
+    monkeypatch.setattr(main, "push_subs", {})
+    monkeypatch.setattr(main, "_save", lambda *a: None)
+    for i in range(main.PUSH_PER_USER):
+        assert client.post("/api/push/subscribe", json={"endpoint": f"https://web.push.apple.com/{i}", "keys": {}}).status_code == 200
+    assert client.post("/api/push/subscribe", json={"endpoint": "https://web.push.apple.com/x", "keys": {}}).status_code == 400
+    # dasselbe Gerät erneut anmelden geht weiter
+    assert client.post("/api/push/subscribe", json={"endpoint": "https://web.push.apple.com/0", "keys": {}}).status_code == 200
+
+
+def test_user_error_has_template_and_args(client):
+    r = client.post("/api/config/import", json={"yaml": "a: [unclosed"})
+    assert r.status_code == 400
+    j = r.json()
+    assert j["msg"] == "YAML fehlerhaft: {e}" and j["detail"].startswith("YAML fehlerhaft: ") and "e" in j["args"]
+
+
+def test_hc_error_with_msg_placeholder():
+    """Platzhalter dürfen wie Parameter heißen (früher: TypeError bei {msg})."""
+    import httpx
+
+    resp = httpx.Response(400, json={"error": "invalid cron"}, request=httpx.Request("POST", "http://hc/api"))
+    e = main._hc_error(httpx.HTTPStatusError("x", request=resp.request, response=resp))
+    assert e.status_code == 400 and e.detail == "Healthchecks lehnt ab: invalid cron" and e.msg_args == {"msg": "invalid cron"}

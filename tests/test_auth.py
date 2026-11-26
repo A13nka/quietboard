@@ -204,3 +204,13 @@ def test_host_settings_override_and_validation(client, store):
         "links": [{"label": "NAS", "url": "https://nas.home.arpa", "vpn": True}],
         "custom": True,
     }
+
+
+def test_last_admin_cannot_be_demoted_even_by_access_admin(tmp_path):
+    """Admins ohne lokales Konto (Access, acting_uid=0) konnten früher alle lokalen Admins herabstufen."""
+    st = auth.Store(tmp_path / "a.db")
+    u = st.create_user("admin@example.org", "langes-passwort-1", "admin")
+    with pytest.raises(auth.AuthError):
+        st.set_role(u["id"], "viewer", 0)
+    v = st.create_user("zwei@example.org", "langes-passwort-2", "admin")
+    assert st.set_role(v["id"], "viewer", 0)["role"] == "viewer"

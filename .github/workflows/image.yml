@@ -13,19 +13,26 @@ permissions:
   packages: write
 
 jobs:
+  # Erst die komplette CI (Lint, Tests, e2e), dann bauen – auch für Tags
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   build:
+    needs: ci
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ghcr.io/${{ github.repository }}
           flavor: latest=false
@@ -36,7 +43,7 @@ jobs:
             type=match,pattern=^(v\d+\.\d+)\.\d+$,group=1
             type=match,pattern=^(v\d+)\.\d+\.\d+$,group=1
             type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -55,10 +62,10 @@ jobs:
       contents: write
       packages: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Installationspaket, install.sh, compose.yaml (auf diese Version festgelegt)
         run: scripts/make-dist.sh "${GITHUB_REF_NAME}"
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -66,7 +73,7 @@ jobs:
       - name: Image-Name in Kleinbuchstaben (GHCR verlangt das, der Repo-Besitzer kann Großbuchstaben haben)
         run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
       - name: SBOM des Images (SPDX)
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           image: ${{ env.IMAGE }}:${{ github.ref_name }}
           format: spdx-json
@@ -74,7 +81,7 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
       - name: Prüfsummen
-        run: cd dist && sha256sum $(ls | grep -v '^SHA256SUMS$') > SHA256SUMS && cat SHA256SUMS
+        run: cd dist && rm -f SHA256SUMS && sha256sum -- * > ../SHA256SUMS.tmp && mv ../SHA256SUMS.tmp SHA256SUMS && cat SHA256SUMS
       - name: GitHub-Release mit Notizen und Dateien
         env:
           GH_TOKEN: ${{ github.token }}

@@ -201,6 +201,8 @@ class Store:
             raise AuthError("Benutzer nicht gefunden")
         if uid == acting_uid and role != "admin":
             raise AuthError("Eigene Admin-Rechte können nicht entzogen werden")
+        if user["role"] == "admin" and role != "admin" and self._q("SELECT COUNT(*) c FROM users WHERE role='admin'")[0]["c"] <= 1:
+            raise AuthError("Der letzte Admin kann nicht herabgestuft werden")
         self._x("UPDATE users SET role=? WHERE id=?", (role, uid))
         return self.get_user(uid)
 

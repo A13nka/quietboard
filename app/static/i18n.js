@@ -215,6 +215,7 @@ window.I18N_EN = {
   "normal – melden": "normal – notify",
   "offen seit {t}": "open since {t}",
   "offline – letzter Stand": "offline – last known state",
+  "offline – Stand vom {t}": "offline – state from {t}",
   "pausiert": "paused",
   "regelmäßig alle …": "every … (interval)",
   "seit {t}": "since {t}",
@@ -248,9 +249,11 @@ window.I18N_EN = {
   "Ungültige E-Mail-Adresse": "Invalid e-mail address",
   "Eigenes Konto kann nicht gelöscht werden": "You cannot delete your own account",
   "Der letzte Admin kann nicht gelöscht werden": "The last admin cannot be deleted",
+  "Der letzte Admin kann nicht herabgestuft werden": "The last admin cannot be demoted",
   "Eigene Admin-Rechte können nicht entzogen werden": "You cannot remove your own admin rights",
   "Bitte einen Namen angeben, z. B. „Backup-Skript nas“": "Please enter a name, e.g. “backup script nas”",
   "Höchstens 20 Tokens pro Benutzer": "At most 20 tokens per user",
+  "Höchstens 10 Geräte pro Konto – Mitteilungen auf einem alten Gerät ausschalten": "At most 10 devices per account – turn off notifications on an old device",
   "Host: Kleinbuchstaben, Ziffern, Punkt, Binde- oder Unterstrich": "Host: lower-case letters, digits, dot, hyphen or underscore",
   "Name: Kleinbuchstaben, Ziffern, Punkt, Binde- oder Unterstrich, z. B. restic-offsite": "Name: lower-case letters, digits, dot, hyphen or underscore, e.g. restic-offsite",
   "Priorität: kritisch, normal oder info": "Priority: critical, normal or info",
@@ -276,5 +279,11 @@ window.I18N_EN = {
   "YAML fehlt oder ist zu groß (höchstens 500 000 Zeichen)": "YAML missing or too large (at most 500,000 characters)",
   "tags und match müssen Blöcke sein": "tags and match must be blocks",
   "Nur JSON erlaubt": "Only JSON allowed",
-  "Anfrage zu groß": "Request too large"
+  "Anfrage zu groß": "Request too large",
+  "Link muss mit http:// oder https:// beginnen: {url}": "Link must start with http:// or https://: {url}",
+  "Healthchecks lehnt ab: {msg}": "Healthchecks rejects: {msg}",
+  "Healthchecks nicht erreichbar: {e}": "Healthchecks not reachable: {e}",
+  "Job {name} gibt es schon": "Job {name} already exists",
+  "Ping-Adresse {slug} gehört schon zu {other} – bitte anderen Namen wählen": "Ping address {slug} already belongs to {other} – please choose another name",
+  "YAML fehlerhaft: {e}": "YAML invalid: {e}"
 };

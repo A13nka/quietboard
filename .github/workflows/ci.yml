@@ -3,6 +3,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:   # vom Image-Workflow: erst testen, dann bauen
 
 permissions:
   contents: read
@@ -11,10 +12,10 @@ jobs:
   lint-test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0          # gitleaks prüft die ganze Historie
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
           cache: pip
@@ -22,6 +23,8 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - name: pre-commit (gitleaks, ruff)
         run: pre-commit run --all-files --show-diff-on-failure
+      - name: gitleaks über die ganze Git-Historie (nicht nur den aktuellen Stand)
+        run: docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f git /repo --redact --no-banner
       - name: Tests
         run: pytest -q
       - name: shellcheck (gleiche Version wie make lint)
@@ -30,7 +33,8 @@ jobs:
           docker run --rm -e LANG=C.UTF-8 -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0 install.sh hosts/*.sh hosts/hc hosts/updates-report generate-env.sh dev/fakehost/run.sh scripts/*.sh deploy/*/*.sh
       - name: Lizenzen (keine unerwartete Copyleft-Lizenz im Image)
         run: |
-          python -m venv /tmp/img && /tmp/img/bin/pip install -q -r requirements.txt pip-licenses
+          python -m venv /tmp/img && /tmp/img/bin/pip install -q --require-hashes --no-deps -r requirements.lock
+          /tmp/img/bin/pip install -q pip-licenses==5.5.5
           # Ausnahmen begründet in docs/decisions/0004-lizenz-certifi-mpl.md
           /tmp/img/bin/pip-licenses --partial-match --fail-on "GPL;AGPL;LGPL;MPL;EUPL;SSPL;BUSL" \
             --ignore-packages pip-licenses prettytable wcwidth certifi
@@ -39,15 +43,15 @@ jobs:
     runs-on: ubuntu-24.04
     needs: lint-test
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Frische Installation hochfahren und prüfen
         run: scripts/e2e.sh
 
   docs:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
           cache: pip
