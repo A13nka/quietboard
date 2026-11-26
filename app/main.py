@@ -483,7 +483,8 @@ def host_updates() -> list[dict]:
     for u in updates.values():
         h = h_(u["host"])
         h["packages"] += len(u["items"])
-        h["kinds"].append(u["kind"])
+        if u["kind"] not in h["kinds"]:  # z. B. mehrere Docker-Image-Berichte → ein Schild „docker“
+            h["kinds"].append(u["kind"])
         for i in u["items"]:
             if i.get("security"):
                 h["security"] += 1

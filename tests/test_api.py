@@ -141,3 +141,21 @@ def test_digest_only_in_window(now_hm, sent, due):
     h, m = map(int, now_hm.split(":"))
     current = dt.datetime(2026, 11, 24, h, m)
     assert main.digest_due("07:00", current, sent) is due
+
+
+def test_host_updates_list_each_kind_once(monkeypatch):
+    """Mehrere Docker-Image-Berichte eines Hosts ergeben ein Schild „docker“, nicht zwei."""
+    from app import main
+
+    item = {"pkg": "img", "from": "1", "to": "2", "security": False, "since": "2026-01-01T00:00:00+00:00"}
+    monkeypatch.setattr(
+        main,
+        "updates",
+        {
+            "d1|docker:a": {"host": "d1", "kind": "docker", "checked": "", "items": [item]},
+            "d1|docker:b": {"host": "d1", "kind": "docker", "checked": "", "items": [item]},
+            "d1|apt": {"host": "d1", "kind": "apt", "checked": "", "items": [item]},
+        },
+    )
+    h = next(x for x in main.host_updates() if x["host"] == "d1")
+    assert h["kinds"] == ["docker", "apt"] and h["packages"] == 3
