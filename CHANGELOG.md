@@ -6,6 +6,11 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Behoben
+- `hc`, `updates-report`, `dsm-report`: wiederholen jetzt auch bei „Verbindung abgelehnt“ (bis zu 2 Minuten). Startete Healthchecks gerade neu – etwa durch ein nächtliches Volume-Backup –, ging die Abschlussmeldung eines Jobs verloren und der Job wurde rot. Hosts bekommen die neue Fassung mit dem Befehl aus „Host hinzufügen“.
+- iOS-App: Die Leiste unten verrutschte auf kurzen Seiten (z. B. Updates) nach oben.
+- Updates: Mehrere Docker-Berichte eines Hosts zeigten das Schild „docker“ mehrfach.
+
 ## 0.5.1 – 2026-11-25
 
 ### Behoben

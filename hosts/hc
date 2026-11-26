@@ -18,9 +18,15 @@ CONF=${HC_CONF:-/etc/hc.conf}
 
 send() { # <slug> <suffix> [bodyfile]
   local url="$HC_PING_BASE/$HC_PING_KEY/$1${2:+/$2}"
-  local args=(-fsS -m 15 --retry 3 --retry-delay 5 -o /dev/null)
+  # Auch „Verbindung abgelehnt“ wiederholen (z. B. Healthchecks startet gerade neu, etwa durch ein nächtliches
+  # Volume-Backup) – insgesamt bis zu 2 Minuten, damit die Abschlussmeldung eines Jobs nicht verloren geht.
+  local args=(-fsS -m 15 --retry 8 --retry-delay 10 --retry-max-time 120 --retry-connrefused -o /dev/null)
   if [ -n "${3:-}" ]; then args+=(--data-binary "@$3"); else args+=(-X POST); fi
-  curl "${args[@]}" "$url" || echo "hc: Ping fehlgeschlagen: ${url/$HC_PING_KEY/***}" >&2
+  local err
+  # Zwischenfehler der Wiederholungen nicht ausgeben (sonst schickt cron jede Nacht eine Mail) – nur das Endergebnis
+  if ! err=$(curl "${args[@]}" "$url" 2>&1); then
+    echo "hc: Ping fehlgeschlagen: ${url/$HC_PING_KEY/***} – ${err##*$'\n'}" >&2
+  fi
 }
 
 case "${1:-}" in

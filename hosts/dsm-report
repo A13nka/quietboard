@@ -18,5 +18,5 @@ done
 if [ -x /usr/syno/sbin/synoupgrade ] && /usr/syno/sbin/synoupgrade --check 2>/dev/null | grep -qi 'available'; then
   items="${items:+$items,}{\"pkg\":\"DSM\",\"from\":\"\",\"to\":\"Update verfügbar\",\"security\":true}"
 fi
-curl -fsS -m 20 --retry 3 -o /dev/null -H "Authorization: Bearer $STATUS_INGEST_TOKEN" -H 'Content-Type: application/json' \
+curl -fsS -m 20 --retry 6 --retry-delay 10 --retry-max-time 120 --retry-connrefused -o /dev/null -H "Authorization: Bearer $STATUS_INGEST_TOKEN" -H 'Content-Type: application/json' \
   --data-binary "{\"host\":\"$HOST\",\"kind\":\"dsm\",\"items\":[${items}]}" "$STATUS_INGEST_URL"

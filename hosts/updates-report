@@ -10,7 +10,7 @@ set -uo pipefail
 HOST=${STATUS_HOST:-$(hostname -s)}
 
 post() { # <json>
-  curl -fsS -m 20 --retry 3 --retry-delay 10 -o /dev/null \
+  curl -fsS -m 20 --retry 6 --retry-delay 10 --retry-max-time 120 --retry-connrefused -o /dev/null \
     -H "Authorization: Bearer $STATUS_INGEST_TOKEN" -H 'Content-Type: application/json' \
     --data-binary "$1" "$STATUS_INGEST_URL"
 }
