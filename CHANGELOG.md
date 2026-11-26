@@ -6,6 +6,18 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Sicherheit
+- Zugriffsschutz und Anmeldung gehärtet. Allen Installationen wird das Update empfohlen; Details folgen nach dem Release (siehe `SECURITY.md`).
+- Weitergeleitete Header (`X-Forwarded-For`, `X-Forwarded-Proto`) gelten nur noch von vertrauten Proxys (`TRUSTED_PROXIES`, Standard `cloudflared`). Wer einen anderen Reverse-Proxy vor der App betreibt, trägt dessen Containernamen oder Netz dort ein.
+- Schreibende Anfragen aus dem Browser müssen von der eigenen Seite kommen und JSON senden – jetzt auch bei Anmeldung über Cloudflare Access.
+- Login-Sperre zusätzlich je Konto; Passwortänderung meldet alle anderen Sitzungen ab; Test-Mitteilungen nur für Admins.
+- Antworten mit Sicherheits-Headern (kein Einbetten in fremde Seiten); Ingest-Token erscheint nicht mehr im Zugriffslog.
+
+### Behoben
+- Proxmox-Webhook: War `checks.yaml` fehlerhaft oder fehlte sie, antwortete die App mit Fehler 500 und das Ereignis ging verloren. Sehr lange Meldungen werden gekürzt statt abgelehnt; ein gekürzter Fehler bleibt ein Fehler.
+- Die Warnung zu `checks.yaml` verschwindet, sobald die Datei wieder lesbar ist (vorher erst nach einem Neustart).
+- Docker meldet den Container beim Start nicht mehr kurz als „unhealthy“.
+
 ## 0.5.2 – 2026-11-26
 
 ### Behoben

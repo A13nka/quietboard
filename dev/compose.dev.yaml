@@ -5,7 +5,7 @@ services:
   status:
     build: .
     image: quietboard:dev
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload", "--reload-dir", "/srv/app"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload", "--reload-dir", "/srv/app", "--no-proxy-headers"]
     environment:
       ALLOW_NO_AUTH: ${ALLOW_NO_AUTH:-1}   # 0 = mit Anmeldung testen
       DEMO: ${DEMO:-true}

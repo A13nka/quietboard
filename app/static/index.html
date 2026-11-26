@@ -241,7 +241,7 @@ $('#reload').onclick=()=>load(true);document.addEventListener('visibilitychange'
 let PU=null;const u8=s=>{const b=atob((s+'='.repeat((4-s.length%4)%4)).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from(b,c=>c.charCodeAt(0))};
 const jpost=(u,b)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
 function puCard(){const x={na:t('Nur in der installierten App: Teilen → „Zum Home-Bildschirm“, dann von dort öffnen.'),denied:t('Blockiert – in iOS unter Einstellungen → Mitteilungen → Status erlauben.'),off:t('Aus auf diesem Gerät'),on:t('Aktiv auf diesem Gerät')}[PU]||'…';
-const b=PU==='off'?`<button class="bt" data-pu="on">${t('Aktivieren')}</button>`:PU==='on'?`<button class="bt" data-pu="test">Test</button><button class="bt" data-pu="off">${t('Aus')}</button>`:'';
+const b=PU==='off'?`<button class="bt" data-pu="on">${t('Aktivieren')}</button>`:PU==='on'?`${isAdmin()?'<button class="bt" data-pu="test">Test</button>':''}<button class="bt" data-pu="off">${t('Aus')}</button>`:'';
 return`<div class="sec">${t('Mitteilungen')}</div><div class="card"><div class="kv" style="padding:11px 12px;align-items:center;gap:8px"><span>${esc(x)}</span><span style="white-space:nowrap">${b}</span></div></div>`}
 async function puInit(){if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)){PU='na';return render()}
 try{const reg=await navigator.serviceWorker.ready;const sub=await reg.pushManager.getSubscription();PU=Notification.permission==='denied'?'denied':sub?'on':'off';if(sub)jpost('/api/push/subscribe',sub.toJSON())}catch(e){PU='na'}render()}

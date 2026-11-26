@@ -49,7 +49,7 @@ def match_event(cfg: dict, source: str, host: str, fields: dict) -> list[dict]:
     """Findet Checks, deren match-Block auf ein PVE/PBS-Event passt."""
     hits = []
     etype = str(fields.get("type", "")).lower()
-    for c in cfg["checks"]:
+    for c in cfg.get("checks") or []:
         m = c.get("match")
         if not m or m.get("source") != source or m.get("host") != host:
             continue

@@ -74,6 +74,9 @@ services:
       SIGNAL_RECIPIENT: ${SIGNAL_RECIPIENT:-}
       INGEST_TOKEN: ${INGEST_TOKEN:?INGEST_TOKEN fehlt in .env (./generate-env.sh)}
       ACCESS_TEAM: ${ACCESS_TEAM:-}
+      # Proxys, deren X-Forwarded-For/-Proto gelten (Containernamen oder Netze, Komma-getrennt)
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-cloudflared}
+      PUBLIC_ORIGINS: ${PUBLIC_ORIGINS:-}
       ACCESS_AUD: ${ACCESS_AUD:-}
       ALLOW_NO_AUTH: ${ALLOW_NO_AUTH:-0}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
