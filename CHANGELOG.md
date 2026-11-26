@@ -6,6 +6,8 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+## 0.6.0 – 2026-11-26
+
 ### Neu
 - **Job-Alarme über QuietBoard:** kurze, einheitliche Meldungen über alle Kanäle (Push, Mail, Signal) – „fehlgeschlagen“ mit Exitcode und letzten Logzeilen, „überfällig“ mit letzter Meldung und Zeitplan, „wieder OK“ mit Ausfalldauer. Mehrere Ausfälle eines Abrufs kommen in einer Nachricht. Umschaltbar unter System → Job-Alarme; übernommene Installationen bleiben bei Healthchecks, bis du umstellst (Integrationen werden dabei gesichert und lassen sich wiederherstellen).
 - **Lebenszeichen `quietboard/app`:** QuietBoard meldet sich bei jedem Abruf in Healthchecks; steht die App, meldet Healthchecks das selbst.
