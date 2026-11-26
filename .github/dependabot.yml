@@ -1,0 +1,17 @@
+# Hält die festgelegten Stände aktuell: Actions (auf Commit-Hashes), Basis-Image (Digest), Python-Pakete.
+# Nach einem pip-Update requirements.lock mit `make lock` neu erzeugen (der Test prüft, dass beide zusammenpassen).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      python: { patterns: ["*"] }

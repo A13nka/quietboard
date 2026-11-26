@@ -48,7 +48,7 @@ const $ = s => document.querySelector(s);
 let LANG = 'de';
 try { LANG = localStorage.getItem('lang') || ((navigator.language || 'en').toLowerCase().startsWith('de') ? 'de' : 'en'); } catch (e) {}
 document.documentElement.lang = LANG;
-const t = s => (LANG === 'en' && window.I18N_EN && I18N_EN[s] != null) ? I18N_EN[s] : s;
+const t = (s, v) => { let r = (LANG === 'en' && window.I18N_EN && I18N_EN[s] != null) ? I18N_EN[s] : s; if (v) for (const k in v) r = r.split('{' + k + '}').join(v[k]); return r; };
 for (const [sel, txt] of [['#sub', 'Anmelden'], ['#codeL', 'Einrichtungscode'], ['#nameL', 'Name (optional)'], ['#emailL', 'E-Mail'], ['#pwL', 'Passwort'], ['#btn', 'Anmelden'], ['#hintT', 'Der Einrichtungscode steht im Log des Servers:']]) {
   const el = $(sel); if (el) el.firstChild.textContent = t(txt);
 }
@@ -77,7 +77,7 @@ $('#f').addEventListener('submit', async e => {
     const r = await fetch(setup ? '/api/auth/setup' : '/api/auth/login',
       {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(t(j.detail || 'Fehler ' + r.status));
+    if (!r.ok) throw new Error(j.msg ? t(j.msg, j.args) : t(j.detail || 'Fehler ' + r.status));
     location.replace(setup ? '/?t=sy' : '/');
   } catch (err) { $('#err').textContent = err.message; }
   finally { $('#btn').disabled = false; }

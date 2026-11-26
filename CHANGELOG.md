@@ -6,6 +6,25 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+Nur der Server ändert sich; Hosts brauchen nichts.
+
+### Behoben
+- Oberfläche: Aufgeklappte Abschnitte und noch nicht gespeicherte Eingaben bleiben beim automatischen Neuladen (alle 30 s) erhalten.
+- Ist der Server nicht erreichbar, zeigt die App den letzten Stand deutlich als „offline – Stand vom …“ (mit Datum, wenn nicht von heute) statt ihn als aktuell auszugeben.
+- Datendateien werden dauerhaft gespeichert (fsync, atomar). Eine unlesbare Datei wird als `*.kaputt-<Zeit>` beiseitegelegt statt beim nächsten Speichern überschrieben.
+- Fehlerhafte Eingaben an Ingest- und Push-Routen ergeben 400 statt 500; Meldungen mit ungewöhnlichem Inhalt (Liste, reiner Text) kommen trotzdem an.
+- Der letzte lokale Admin kann nicht mehr herabgestuft werden (auch nicht von Admins über Cloudflare Access); unbekannte Konten ergeben 404.
+- Höchstens 10 Push-Geräte pro Konto.
+- Fehlermeldungen wie „Job … gibt es schon“ erscheinen jetzt auch auf Englisch.
+- `install.sh` schreibt sein Log in eine eigene Temp-Datei.
+
+### Intern
+- Lieferkette:
+  - GitHub Actions auf Commit-Hashes, Basis-Image `python:3.13.18-slim` per Digest; Dependabot hält sie aktuell.
+  - Alle Python-Abhängigkeiten mit Prüfsummen in `requirements.lock` (`make lock`); das Image installiert nur diese Datei.
+- CI: gitleaks prüft die ganze Git-Historie; Images werden erst nach bestandener CI gebaut.
+- `app/sources.py`: PBS-Abruf und Versionsvergleich aus `main.py` herausgelöst.
+
 ## 0.7.0 – 2026-11-26
 
 ### Hinweis zur Anbindung der Hosts

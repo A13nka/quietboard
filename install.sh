@@ -107,8 +107,10 @@ echo "QuietBoard: $(m "lade Images (erstes Mal ~1–3 Minuten):" "pulling images
 docker compose config --images 2>/dev/null | sort -u | sed 's/^/  - /'
 docker compose pull --ignore-pull-failures || die "$(m "Images konnten nicht geladen werden – Internetverbindung prüfen" "Could not pull images – check the internet connection")"
 echo "QuietBoard: $(m "starte Dienste …" "starting services …")"
-docker compose up -d --remove-orphans >/tmp/quietboard-up.log 2>&1 \
-  || { tail -20 /tmp/quietboard-up.log >&2; die "docker compose up $(m "fehlgeschlagen" "failed")"; }
+uplog=$(mktemp)   # eigene Temp-Datei (ein fester Pfad in /tmp kann einem anderen Benutzer gehören)
+docker compose up -d --remove-orphans >"$uplog" 2>&1 \
+  || { tail -20 "$uplog" >&2; rm -f "$uplog"; die "docker compose up $(m "fehlgeschlagen" "failed")"; }
+rm -f "$uplog"
 
 port=$(get STATUS_PORT); port=${port:-8088}
 for _ in $(seq 1 90); do

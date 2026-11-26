@@ -37,6 +37,9 @@ down:   ## lokale Umgebung stoppen (Daten bleiben in Docker-Volumes)
 logs:   ## Logs der App
 	$(DEV) logs -f status
 
+lock:   ## requirements.lock aus requirements.txt neu erzeugen (alle Abhängigkeiten fest, mit Prüfsummen)
+	scripts/lock.sh
+
 test:   ## Unit- und API-Tests
 	$(PY) -m pytest -q -p no:cacheprovider
 

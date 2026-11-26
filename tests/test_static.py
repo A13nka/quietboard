@@ -51,3 +51,20 @@ def test_server_messages_have_english_and_same_placeholders():
 
     for de, en in i18n.EN.items():
         assert sorted(re.findall(r"\{\w+\}", de)) == sorted(re.findall(r"\{\w+\}", en)), de
+
+
+def test_lockfile_matches_direct_requirements():
+    """requirements.lock (Image) muss die Versionen aus requirements.txt enthalten – sonst `make lock`."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    lock = {
+        m.group(1).lower().replace("_", "-"): m.group(2)
+        for m in re.finditer(r"^([A-Za-z0-9_.-]+)==([^\s\\]+)", (root / "requirements.lock").read_text(), re.M)
+    }
+    for line in (root / "requirements.txt").read_text().splitlines():
+        m = re.match(r"^([A-Za-z0-9_.-]+)(?:\[[^\]]*\])?==(\S+)", line)
+        if m:
+            name = m.group(1).lower().replace("_", "-")
+            assert lock.get(name) == m.group(2), f"{name}: requirements.txt {m.group(2)} ≠ requirements.lock {lock.get(name)} – make lock"

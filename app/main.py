@@ -11,7 +11,6 @@ import asyncio
 import base64
 import contextlib
 import datetime as dt
-import hashlib
 import hmac
 import ipaddress
 import json
@@ -37,6 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from . import alerts, auth, bootstrap, config, i18n, push, security
 from . import jobs as jobs_mod
 from .i18n import tr
+from .sources import TAG_RE, _fingerprint, _ver, fetch_pbs, pbs_verify  # noqa: F401 (TAG_RE, _fingerprint: Altnamen)
 
 log = logging.getLogger("status")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
@@ -109,16 +109,32 @@ def _load(name: str, default):
         return json.loads(p.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return default
-    except Exception as exc:  # beschädigte Datei nicht crashen lassen
-        log.error("Kann %s nicht lesen: %s", name, exc)
+    except Exception as exc:  # beschädigte Datei nicht crashen lassen – und nicht beim nächsten Speichern überschreiben
+        keep = p.with_name(f"{name}.kaputt-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}")
+        try:
+            p.replace(keep)
+            log.error("Kann %s nicht lesen (%s) – beiseitegelegt als %s, starte leer", name, exc, keep.name)
+        except OSError:
+            log.error("Kann %s nicht lesen: %s", name, exc)
         return default
 
 
 def _save(name: str, obj) -> None:
+    """Atomar und dauerhaft: erst vollständig in eine Temp-Datei (fsync), dann umbenennen (auch nach Stromausfall
+    liegt entweder der alte oder der neue Stand vor, nie ein halber)."""
     p = DATA / name
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=1), encoding="utf-8")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(obj, ensure_ascii=False, indent=1))
+        fh.flush()
+        os.fsync(fh.fileno())
     tmp.replace(p)
+    with contextlib.suppress(OSError):
+        fd = os.open(DATA, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 updates: dict = _load("updates.json", {})  # key "<host>|<kind>" -> Bericht
@@ -419,67 +435,6 @@ async def fetch_hosts(cli: httpx.AsyncClient) -> list[dict]:
             }
         )
     return out
-
-
-_pbs_warned: set[str] = set()
-
-
-def _fingerprint(resp: httpx.Response) -> str:
-    """SHA-256 des Server-Zertifikats der Verbindung, über die `resp` kam (Hex, klein, ohne Doppelpunkte)."""
-    stream = resp.extensions.get("network_stream")
-    obj = stream.get_extra_info("ssl_object") if stream else None
-    der = obj.getpeercert(binary_form=True) if obj else None
-    return hashlib.sha256(der).hexdigest() if der else ""
-
-
-def pbs_verify(check: str) -> tuple[bool | str, str]:
-    """(verify-Wert für httpx, erwarteter Fingerprint) aus dem optionalen 5. Feld von PBS_TARGETS."""
-    check = (check or "").strip()
-    if check.lower() == "verify":
-        return True, ""
-    if check.lower().startswith("ca:"):
-        return check[3:], ""
-    fp = check.replace(":", "").lower()
-    if fp and not re.fullmatch(r"[0-9a-f]{64}", fp):
-        raise ValueError("PBS_TARGETS: Prüfung muss ein SHA-256-Fingerprint, ca:/pfad oder verify sein")
-    return False, fp
-
-
-async def fetch_pbs(name: str, url: str, token_id: str, secret: str, check: str = "") -> dict:
-    verify, fp = pbs_verify(check)
-    if verify is False and not fp and name not in _pbs_warned:
-        _pbs_warned.add(name)
-        log.warning("PBS %s: Zertifikat wird nicht geprüft – Fingerprint als 5. Feld in PBS_TARGETS eintragen (Doku: env)", name)
-    async with httpx.AsyncClient(timeout=10, verify=verify) as cli:
-        if fp:
-            # Erst ohne Token prüfen, mit wem wir sprechen; danach jede Antwort (neue Verbindungen möglich)
-            probe = await cli.get(f"{url}/api2/json/version")
-            if _fingerprint(probe) != fp:
-                raise ValueError(f"PBS {name}: Zertifikat passt nicht zum Fingerprint")
-        headers = {"Authorization": f"PBSAPIToken={token_id}:{secret}"}
-        r1 = (await cli.get(f"{url}/api2/json/status/datastore-usage", headers=headers)).raise_for_status()
-        r2 = (
-            await cli.get(f"{url}/api2/json/nodes/localhost/tasks", params={"running": 1, "limit": 20}, headers=headers)
-        ).raise_for_status()
-        if fp and not (_fingerprint(r1) == fp and _fingerprint(r2) == fp):
-            raise ValueError(f"PBS {name}: Zertifikat passt nicht zum Fingerprint")
-        ds, tasks = r1.json()["data"], r2.json()["data"]
-    return {
-        "online": True,
-        "checked": now().isoformat(timespec="seconds"),
-        "datastores": [{"store": d.get("store"), "total": d.get("total"), "used": d.get("used")} for d in ds],
-        "running": [{"type": t.get("worker_type"), "id": t.get("worker_id"), "start": t.get("starttime")} for t in tasks],
-    }
-
-
-TAG_RE = re.compile(r"^(v?)(\d+(?:\.\d+)*)(.*)$")
-
-
-def _ver(tag: str):
-    m = TAG_RE.match(tag)
-    if not m:
-        return None
-    return m.group(1), tuple(int(x) for x in m.group(2).split(".")), m.group(3)
 
 
 async def check_watch_images(cli: httpx.AsyncClient) -> None:
@@ -1062,6 +1017,20 @@ app.add_middleware(security.ShieldMiddleware, trusted=security.TrustedProxies(E(
 security.install_log_filter()
 
 
+class UserError(HTTPException):
+    """Fehler mit Text-Vorlage und Werten: `detail` bleibt ein fertiger (deutscher) Text für Skripte, dazu kommen
+    `msg` (Vorlage) und `args`, damit die Oberfläche auch zusammengesetzte Texte übersetzen kann."""
+
+    def __init__(self, status_code: int, template: str, /, **args):
+        super().__init__(status_code, template.format(**args))
+        self.msg, self.msg_args = template, {k: str(v) for k, v in args.items()}
+
+
+@app.exception_handler(UserError)
+async def _user_error(request: Request, exc: UserError):
+    return JSONResponse({"detail": exc.detail, "msg": exc.msg, "args": exc.msg_args}, status_code=exc.status_code)
+
+
 def require_admin(request: Request) -> dict:
     user = getattr(request.state, "user", None)
     if not user or user.get("role") != "admin":
@@ -1271,12 +1240,31 @@ async def api_check_log(uuid: str):
 
 
 # ---------------------------------------------------------------- Ingest (über WireGuard, Token)
+HOST_RE = re.compile(r"[A-Za-z0-9._-]{1,80}")
+
+
+async def _json_or_text(request: Request) -> dict:
+    """Body als Objekt; kein JSON oder kein Objekt (Liste, Text) → {"message": <Text>} statt Fehler 500."""
+    try:
+        b = await request.json()
+    except Exception:
+        return {"message": (await request.body()).decode(errors="replace")}
+    return b if isinstance(b, dict) else {"message": json.dumps(b, ensure_ascii=False)[:4000]}
+
+
 @app.post("/api/ingest/updates")
 async def ingest_updates(request: Request):
     """Body: {host, kind: apt|dsm|docker|scanner|mailcow, items: [{pkg, from, to, security}], reboot?: bool}"""
     require_token(request)
-    b = await request.json()
-    host, kind = str(b["host"])[:80], str(b.get("kind", "apt"))[:20]
+    try:
+        b = await request.json()
+    except Exception:
+        raise HTTPException(400, "Kein gültiges JSON") from None
+    if not isinstance(b, dict) or not isinstance(b.get("host"), str) or not HOST_RE.fullmatch(b["host"]):
+        raise HTTPException(400, "host fehlt oder ungültig")
+    if not isinstance(b.get("items", []), list):
+        raise HTTPException(400, "items muss eine Liste sein")
+    host, kind = b["host"], str(b.get("kind", "apt"))[:20]
     key = f"{host}|{kind}"
     ts = now().isoformat(timespec="seconds")
     f = flags.setdefault(host, {})
@@ -1290,7 +1278,7 @@ async def ingest_updates(request: Request):
     f["reported"] = ts
     prev = {i["pkg"]: i.get("since") for i in updates.get(key, {}).get("items", [])}
     items = []
-    for i in (b.get("items") or [])[:500]:
+    for i in [i for i in (b.get("items") or []) if isinstance(i, dict)][:500]:
         it = {
             "pkg": str(i.get("pkg", ""))[:120],
             "from": str(i.get("from", ""))[:60],
@@ -1326,8 +1314,10 @@ async def ingest_pve(request: Request, source: str = "pve", host: str = "pve"):
         sev = re.search(r'"severity"\s*:\s*"(\w+)"', raw)
         ttl = re.search(r'"title"\s*:\s*"([^"]{1,200})"', raw)
         b = {"severity": sev.group(1) if sev else "unknown", "title": ttl.group(1) if ttl else "unlesbares Event", "message": raw}
+    if not isinstance(b, dict):
+        b = {"severity": "unknown", "title": "unlesbares Event", "message": json.dumps(b, ensure_ascii=False)[:4000]}
     severity = str(b.get("severity", "info")).lower()
-    fields = b.get("fields") or {}
+    fields = b.get("fields") if isinstance(b.get("fields"), dict) else {}
     title, message = str(b.get("title", "")), str(b.get("message", ""))
     hits = config.match_event(cfg, source, host, fields)
     seen = {c["slug"] for c in hits}
@@ -1374,10 +1364,7 @@ async def ingest_pve(request: Request, source: str = "pve", host: str = "pve"):
 async def ingest_beszel(request: Request):
     """Beszel-Benachrichtigung (Shoutrrr generic, template=json). Nur vom Beszel-Container oder mit Token."""
     require_beszel(request)
-    try:
-        b = await request.json()
-    except Exception:
-        b = {"title": "Beszel", "message": (await request.body()).decode(errors="replace")}
+    b = await _json_or_text(request)
     title, message = str(b.get("title", "Beszel")), str(b.get("message", ""))
     add_event("beszel", title, message, "normal")
     # Schlüssel ohne Zustandswort: „web01 is down“ und „web01 is up“ gehören zusammen; gleicher Zustand innerhalb
@@ -1396,13 +1383,12 @@ async def ingest_notify(request: Request):
     Versteht auch den signal-api-Body {"message": ...} (für bestehende Bridges).
     Query: ?source=…&prio=… überschreiben; ohne prio: Fehlerwörter → normal, sonst info."""
     require_token(request)
-    try:
-        b = await request.json()
-    except Exception:
-        b = {"message": (await request.body()).decode(errors="replace")}
+    b = await _json_or_text(request)
     message = str(b.get("message", ""))
     title = str(b.get("title") or (message.strip().splitlines() or ["Meldung"])[0])[:200]
-    prio = request.query_params.get("prio") or b.get("prio") or ("normal" if ERROR_WORDS.search(title + " " + message) else "info")
+    prio = (
+        request.query_params.get("prio") or str(b.get("prio") or "") or ("normal" if ERROR_WORDS.search(title + " " + message) else "info")
+    )
     source = request.query_params.get("source") or str(b.get("source", "notify"))
     add_event(source, title, message, prio)
     if prio in ("kritisch", "normal"):
@@ -1420,10 +1406,7 @@ async def ingest_signal_compat(token: str, request: Request):
     SIGNAL_API_URL=http://<server>:8088/api/ingest/signal/<INGEST_TOKEN>  (Bridge hängt /v2/send an)."""
     if not _token_ok(token):
         raise HTTPException(401, "Token fehlt oder falsch")
-    try:
-        b = await request.json()
-    except Exception:
-        b = {"message": (await request.body()).decode(errors="replace")}
+    b = await _json_or_text(request)
     message = str(b.get("message", ""))
     title = (message.strip().splitlines() or ["Meldung"])[0][:200]
     prio = request.query_params.get("prio") or ("normal" if ERROR_WORDS.search(message) else "info")
@@ -1441,17 +1424,25 @@ async def push_key():
     return {"key": VAPID.public_b64}
 
 
+PUSH_PER_USER = 10
+
+
 @app.post("/api/push/subscribe")
 async def push_subscribe(request: Request):
-    b = await request.json()
-    sub = {"endpoint": b.get("endpoint"), "keys": b.get("keys") or {}}
-    if not push.valid_subscription(sub):
+    b = await _body(request)
+    sub = {"endpoint": b.get("endpoint"), "keys": b.get("keys") if isinstance(b.get("keys"), dict) else {}}
+    if not isinstance(sub["endpoint"], str) or not push.valid_subscription(sub):
         raise HTTPException(400, "ungültige Push-Registrierung")
+    user = getattr(request.state, "user", None) or {}
+    owner = str(user.get("email") or user.get("id") or "")
     known = push_subs.get(sub["endpoint"])
+    if not known and owner and sum(1 for s in push_subs.values() if s.get("owner") == owner) >= PUSH_PER_USER:
+        raise HTTPException(400, "Höchstens 10 Geräte pro Konto – Mitteilungen auf einem alten Gerät ausschalten")
     push_subs[sub["endpoint"]] = {
         **sub,
         "since": (known or {}).get("since") or now().isoformat(timespec="seconds"),
         "ua": request.headers.get("user-agent", "")[:120],
+        "owner": owner,
     }
     _save("push.json", push_subs)
     if not known:
@@ -1461,7 +1452,7 @@ async def push_subscribe(request: Request):
 
 @app.post("/api/push/unsubscribe")
 async def push_unsubscribe(request: Request):
-    b = await request.json()
+    b = await _body(request)
     push_subs.pop(str(b.get("endpoint")), None)
     _save("push.json", push_subs)
     return {"ok": True, "count": len(push_subs)}
@@ -1599,6 +1590,8 @@ async def users_create(request: Request):
 async def users_update(uid: int, request: Request):
     me = require_admin(request)
     b = await _body(request)
+    if not STORE.get_user(uid):
+        raise HTTPException(404, "Benutzer nicht gefunden")
     try:
         if "password" in b:
             await _hashing(STORE.set_password, uid, b["password"])
@@ -1612,6 +1605,8 @@ async def users_update(uid: int, request: Request):
 @app.delete("/api/users/{uid}")
 async def users_delete(uid: int, request: Request):
     me = require_admin(request)
+    if not STORE.get_user(uid):
+        raise HTTPException(404, "Benutzer nicht gefunden")
     try:
         STORE.delete_user(uid, me.get("id", 0))
     except auth.AuthError as exc:
@@ -1801,7 +1796,7 @@ async def host_settings_put(name: str, request: Request):
         if not url:
             continue
         if not _URL.fullmatch(url):
-            raise HTTPException(400, f"Link muss mit http:// oder https:// beginnen: {url[:60]}")
+            raise UserError(400, "Link muss mit http:// oder https:// beginnen: {url}", url=url[:60])
         links.append({"label": label or "Weboberfläche", "url": url})
     hs = host_settings()
     hs[name] = {"always_on": bool(b.get("always_on", True)), "links": links}
@@ -1863,10 +1858,10 @@ def _hc_error(exc: httpx.HTTPError) -> HTTPException:
             msg = exc.response.json().get("error", "")
         except Exception:
             msg = exc.response.text[:200]
-        return HTTPException(400, f"Healthchecks lehnt ab: {msg}")
+        return UserError(400, "Healthchecks lehnt ab: {msg}", msg=msg)
     if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 404:
         return HTTPException(404, "Job nicht gefunden (inzwischen gelöscht?)")
-    return HTTPException(502, f"Healthchecks nicht erreichbar: {type(exc).__name__}")
+    return UserError(502, "Healthchecks nicht erreichbar: {e}", e=type(exc).__name__)
 
 
 def job_alerts_mode() -> str:
@@ -1944,10 +1939,10 @@ async def check_create(request: Request):
     except jobs_mod.JobError as exc:
         raise HTTPException(400, str(exc)) from None
     if any(c["name"] == body["name"] for c in state["checks"]):
-        raise HTTPException(409, f"Job {body['name']} gibt es schon")
+        raise UserError(409, "Job {name} gibt es schon", name=body["name"])
     other = _slug_taken(body["slug"])
     if other:
-        raise HTTPException(409, f"Ping-Adresse {body['slug']} gehört schon zu {other} – bitte anderen Namen wählen")
+        raise UserError(409, "Ping-Adresse {slug} gehört schon zu {other} – bitte anderen Namen wählen", slug=body["slug"], other=other)
     try:
         body["channels"] = await _channel_ids(prio)
         created = (await _hc("POST", "/api/v3/checks/", json=body)).json()
@@ -2042,7 +2037,7 @@ async def config_import(request: Request):
     try:
         doc = yaml.safe_load(text) or {}
     except yaml.YAMLError as exc:
-        raise HTTPException(400, f"YAML fehlerhaft: {str(exc).splitlines()[0]}") from None
+        raise UserError(400, "YAML fehlerhaft: {e}", e=str(exc).splitlines()[0]) from None
     if (
         not isinstance(doc, dict)
         or not isinstance(doc.get("checks") or [], list)
