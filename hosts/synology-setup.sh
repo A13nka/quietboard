@@ -9,6 +9,9 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 [ "$(id -u)" = 0 ] || { echo "Bitte als root ausführen (sudo -i)" >&2; exit 1; }
 QB_HOST=${QB_HOST:-$(hostname -s | tr '[:upper:]' '[:lower:]')}
+[[ $QB_HOST =~ ^[A-Za-z0-9._-]{1,64}$ ]] || { echo "Ungültiger Hostname '$QB_HOST' (erlaubt: Buchstaben, Ziffern, . _ -)" >&2; exit 1; }
+# Die Datei wird von hc/dsm-report als root eingelesen: Werte quotieren, damit nichts darin ausgeführt wird
+sq() { local q="'\\''"; printf "'%s'" "${1//\'/$q}"; }
 QB_AGENT_MODE=${QB_AGENT_MODE:-keep}
 [ "$QB_AGENT_MODE" = auto ] && QB_AGENT_MODE=keep
 CONF=/usr/local/etc/quietboard.conf
@@ -19,11 +22,11 @@ mkdir -p /usr/local/etc /usr/local/bin
   umask 077
   cat > "$CONF" <<EOF
 # QuietBoard – angelegt von synology-setup.sh
-HC_PING_BASE=$QB_PING_BASE
-HC_PING_KEY=$QB_PING_KEY
-STATUS_INGEST_URL=$QB_INGEST_URL
-STATUS_INGEST_TOKEN=$QB_INGEST_TOKEN
-STATUS_HOST=$QB_HOST
+HC_PING_BASE=$(sq "$QB_PING_BASE")
+HC_PING_KEY=$(sq "$QB_PING_KEY")
+STATUS_INGEST_URL=$(sq "$QB_INGEST_URL")
+STATUS_INGEST_TOKEN=$(sq "$QB_INGEST_TOKEN")
+STATUS_HOST=$(sq "$QB_HOST")
 EOF
 )
 install -m 0755 "$here/hc" "$here/dsm-report" /usr/local/bin/

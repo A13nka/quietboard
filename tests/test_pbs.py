@@ -76,7 +76,7 @@ def test_wrong_fingerprint_sends_no_token(pbs):
     seen.clear()
     with pytest.raises(ValueError):
         asyncio.run(main.fetch_pbs("p", url, "id", "sec", "0" * 64))
-    assert seen and all(auth is None for _, auth in seen)  # nur die Probe ohne Token
+    assert all(auth is None for _, auth in seen)  # geprüft wird im Handshake: keine Anfrage mit Token
 
 
 def test_without_check_still_works(pbs):
@@ -89,3 +89,19 @@ def test_invalid_check_value():
         main.pbs_verify("abc")
     assert main.pbs_verify("verify") == (True, "")
     assert main.pbs_verify("ca:/x.pem") == ("/x.pem", "")
+
+
+def test_pinned_context_rejects_other_certificate(pbs):
+    """Wechselt das Zertifikat nach der ersten Prüfung, scheitert schon der Handshake – das Token geht nicht hinaus."""
+    url, fp, seen = pbs
+    asyncio.run(main.fetch_pbs("p", url, "id", "sec", fp))
+    from app import sources
+
+    other = ssl.create_default_context()  # vertraut nur öffentlichen CAs, nicht dem Testzertifikat
+    other.verify_flags = sources._pinned[(url, fp)].verify_flags
+    sources._pinned[(url, fp)] = other
+    seen.clear()
+    with pytest.raises(ValueError, match="Fingerprint"):
+        asyncio.run(main.fetch_pbs("p", url, "id", "sec", fp))
+    assert not seen
+    assert (url, fp) not in sources._pinned  # beim nächsten Mal neu holen und vergleichen

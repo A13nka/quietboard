@@ -9,14 +9,27 @@ CONF=${QB_CONF:-/usr/local/etc/quietboard.conf}
 : "${STATUS_INGEST_URL:?STATUS_INGEST_URL fehlt}" "${STATUS_INGEST_TOKEN:?STATUS_INGEST_TOKEN fehlt}"
 HOST=${STATUS_HOST:-$(hostname -s)}
 
+post() {
+  curl -fsS -m 20 --retry 6 --retry-delay 10 --retry-max-time 120 --retry-connrefused -o /dev/null -H "Authorization: Bearer $STATUS_INGEST_TOKEN" -H 'Content-Type: application/json' \
+    --data-binary "$1" "$STATUS_INGEST_URL"
+}
+
 items=""
 # synopkg checkupdateall: JSON-Liste aktualisierbarer Pakete (Felder "id"/"name", "version")
-for p in $(/usr/syno/bin/synopkg checkupdateall 2>/dev/null | grep -o '"id":"[^"]*"' | cut -d'"' -f4); do
+out=$(/usr/syno/bin/synopkg checkupdateall 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ] && ! printf '%s' "$out" | grep -q '\['; then
+  # Fehler ohne JSON-Liste: kein leerer Bericht, sonst sähe das NAS „aktuell“ aus. Letzter Stand bleibt, die App
+  # zeigt den Fehler. (Ein Exitcode ≠ 0 mit Liste gilt als Antwort – synopkg ist da je nach DSM-Version eigen.)
+  msg=$(printf '%s' "$out" | tr -d '"' | tr -d '\134' | tr '\n' ' ' | cut -c1-150)
+  post "{\"host\":\"$HOST\",\"kind\":\"dsm\",\"error\":\"synopkg: ${msg:-Fehler}\"}"
+  exit 1
+fi
+for p in $(printf '%s' "$out" | grep -o '"id":"[^"]*"' | cut -d'"' -f4); do
   items="${items:+$items,}{\"pkg\":\"$p\",\"from\":\"\",\"to\":\"Update\",\"security\":false}"
 done
 # DSM selbst (falls vorhanden): synoupgrade meldet ein verfügbares Update
 if [ -x /usr/syno/sbin/synoupgrade ] && /usr/syno/sbin/synoupgrade --check 2>/dev/null | grep -qi 'available'; then
   items="${items:+$items,}{\"pkg\":\"DSM\",\"from\":\"\",\"to\":\"Update verfügbar\",\"security\":true}"
 fi
-curl -fsS -m 20 --retry 6 --retry-delay 10 --retry-max-time 120 --retry-connrefused -o /dev/null -H "Authorization: Bearer $STATUS_INGEST_TOKEN" -H 'Content-Type: application/json' \
-  --data-binary "{\"host\":\"$HOST\",\"kind\":\"dsm\",\"items\":[${items}]}" "$STATUS_INGEST_URL"
+post "{\"host\":\"$HOST\",\"kind\":\"dsm\",\"items\":[${items}]}"

@@ -191,3 +191,22 @@ def test_alerts_keep_existing_app_webhook_of_predecessor(dirs):
     run_alerts(fake, {"sys2"})  # QuietBoard mit seinem eigenen Webhook-Namen
     rec = next(iter(fake.settings.values()))["settings"]
     assert rec["webhooks"] == ["generic://status-app:8080/api/ingest/beszel?template=json"]
+
+
+def test_rejected_hc_key_is_reloaded(tmp_path, monkeypatch):
+    """Review 3b-N7: Healthchecks neu aufgesetzt (neue Keys in der Datei) → die App liest sie nach einer Ablehnung neu
+    ein, statt bis zum Neustart mit 401 zu laufen."""
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path)
+    (tmp_path / "healthchecks.json").write_text('{"api_key": "neu", "ping_key": "ping-neu"}')
+    creds = bootstrap.Credentials(hc_api_key="alt", hc_ping_key="ping-alt")
+    asyncio.run(bootstrap.ensure(creds, env={}))
+    assert creds.hc_api_key == "alt"  # nicht abgelehnt: nichts ändern
+    creds.hc_rejected = True
+    asyncio.run(bootstrap.ensure(creds, env={}))
+    assert (creds.hc_api_key, creds.hc_ping_key, creds.hc_rejected) == ("neu", "ping-neu", False)
+
+
+def test_private_file_mode(tmp_path):
+    p = tmp_path / "beszel.json"
+    bootstrap._write_private(p, {"user": "a"})
+    assert p.stat().st_mode & 0o777 == 0o600 and json.loads(p.read_text()) == {"user": "a"}

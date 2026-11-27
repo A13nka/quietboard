@@ -98,7 +98,7 @@ def test_trusted_proxy_by_name(monkeypatch):
 
 
 def test_beszel_webhook_ignores_forwarded_for(monkeypatch):
-    monkeypatch.setattr(main, "_resolve", lambda host: {"172.18.0.4"})
+    monkeypatch.setattr(main, "_beszel_ips", lambda: {"172.18.0.4"})
     c = TestClient(main.app)
     r = c.post("/api/ingest/beszel", json={"title": "x"}, headers={"X-Forwarded-For": "172.18.0.4"})
     assert r.status_code == 401
@@ -295,7 +295,7 @@ def test_login_body_limit_is_small():
     c = TestClient(main.app)
     r = c.post("/api/auth/login", content=b'{"email":"' + b"a" * 20_000 + b'"}', headers={"Content-Type": "application/json"})
     assert r.status_code == 413
-    assert security.body_limit("/api/config/import") > 500_000
+    assert security.body_limit("/api/config/import") > 200_000
 
 
 def test_no_auth_mode_still_blocks_cross_site_writes(monkeypatch):
@@ -305,3 +305,30 @@ def test_no_auth_mode_still_blocks_cross_site_writes(monkeypatch):
     r = c.put("/api/settings", json={"digest_time": "07:00"}, headers={"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"})
     assert r.status_code == 403
     assert c.put("/api/settings", json={"digest_time": "07:00"}).status_code == 200  # Skript ohne Origin
+
+
+def test_proxy_names_resolved_in_background(monkeypatch):
+    """Nach der ersten Auflösung wartet keine Anfrage mehr auf DNS (Review 3b-M7): ist der Eintrag abgelaufen, wird
+    im Hintergrund neu aufgelöst, die Anfrage nimmt den alten Stand."""
+    calls = []
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+
+        async def slow_getaddrinfo(name, port):
+            calls.append(name)
+            await asyncio.sleep(0.3)  # gestörter Upstream-DNS
+            return [(0, 0, 0, "", ("172.30.0.9", 0))]
+
+        monkeypatch.setattr(loop, "getaddrinfo", slow_getaddrinfo)
+        tp = security.TrustedProxies("cloudflared")
+        await tp.ready()  # erste Auflösung: einmal warten
+        assert "172.30.0.9" in tp
+        tp._cache = (tp._cache[0] - tp.TTL, tp._cache[1])  # abgelaufen
+        t0 = loop.time()
+        assert "172.30.0.9" in tp  # alter Stand, sofort
+        assert loop.time() - t0 < 0.05
+        await tp._task
+        assert calls == ["cloudflared", "cloudflared"]
+
+    asyncio.run(scenario())

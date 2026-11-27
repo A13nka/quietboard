@@ -120,6 +120,7 @@ class Store:
         except OSError:
             pass
         self.setup_code: str | None = None
+        self._setup_logged = float("-inf")
         self._setup_tries = 0
         self._failures: dict[str, list[float]] = {}
         self._acct_last: dict[str, float] = {}
@@ -144,10 +145,15 @@ class Store:
         if self.has_users():
             self.setup_code = None
             return None
-        if not self.setup_code:
+        new = not self.setup_code
+        if new:
             raw = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(8))
             self.setup_code = f"{raw[:4]}-{raw[4:]}"
-        log.warning("Einrichtungscode: %s  – im Browser eingeben, um das Admin-Konto anzulegen", self.setup_code)
+        # Höchstens einmal pro Minute ins Log (neuer Code: immer): GET /setup ist ohne Anmeldung erreichbar und
+        # dürfte das Log sonst beliebig fluten (Review 3a-N2)
+        if new or time.monotonic() - self._setup_logged >= 60:
+            self._setup_logged = time.monotonic()
+            log.warning("Einrichtungscode: %s  – im Browser eingeben, um das Admin-Konto anzulegen", self.setup_code)
         return self.setup_code
 
     def complete_setup(self, code: str, email: str, password: str, name: str = "") -> dict:

@@ -22,9 +22,10 @@ def _parse(iso: str | None) -> dt.datetime | None:
     if not iso:
         return None
     try:
-        return dt.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        t = dt.datetime.fromisoformat(iso.replace("Z", "+00:00"))
     except ValueError:
         return None
+    return t if t.tzinfo else t.replace(tzinfo=dt.UTC)  # ohne Zeitzone: UTC (so liefert PocketBase/Beszel)
 
 
 def when(iso: str | None, now: dt.datetime) -> str:

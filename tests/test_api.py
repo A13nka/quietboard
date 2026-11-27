@@ -90,7 +90,7 @@ def test_beszel_webhook_accepts_token(client):
 
 
 def test_beszel_webhook_accepts_beszel_container(client, monkeypatch):
-    monkeypatch.setattr(main, "_resolve", lambda host: {"testclient"})
+    monkeypatch.setattr(main, "_beszel_ips", lambda: {"testclient"})
     r = client.post("/api/ingest/beszel", json={"title": "Disk", "message": "voll"})
     assert r.status_code == 200
 
@@ -294,3 +294,23 @@ def test_deleting_user_removes_their_push_devices(client, monkeypatch):
     monkeypatch.setattr(main, "push_subs", {"https://a/1": {"owner": "weg@example.org"}, "https://a/2": {"owner": "bleibt@example.org"}})
     assert client.delete(f"/api/users/{u['id']}").status_code == 200
     assert list(main.push_subs) == ["https://a/2"]
+
+
+def test_ingest_updates_limits(client, monkeypatch):
+    """Review 3b-M8: kind geprüft, Obergrenzen für Berichtsarten je Host und für Hosts insgesamt."""
+    monkeypatch.setattr(main, "updates", {})
+    monkeypatch.setattr(main, "flags", {})
+    post = lambda host, kind: client.post(  # noqa: E731
+        "/api/ingest/updates", json={"host": host, "kind": kind, "items": [{"pkg": "a"}]}, headers=AUTH
+    )
+    assert post("web01", "Apt Report").status_code == 400
+    assert post("web01", "x" * 21).status_code == 400
+    for i in range(main.MAX_KINDS_PER_HOST):
+        assert post("web01", f"k{i}").status_code == 200
+    assert post("web01", "eins-zu-viel").status_code == 400
+    assert post("web01", "k0").status_code == 200  # vorhandene Art darf weiter melden
+    monkeypatch.setattr(main, "MAX_REPORT_HOSTS", 3)
+    assert post("web02", "apt").status_code == 200
+    assert post("web03", "apt").status_code == 200
+    assert post("web04", "apt").status_code == 400
+    assert post("web03", "dsm").status_code == 200  # bekannter Host

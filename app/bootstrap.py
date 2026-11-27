@@ -11,6 +11,7 @@ Alles ist idempotent. Werte aus der Umgebung (Bestandsinstallationen) haben Vorr
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -35,6 +36,7 @@ class Credentials:
     agent_token: str = ""
     hub_key: str = ""
     errors: dict[str, str] = field(default_factory=dict)
+    hc_rejected: bool = False  # Healthchecks hat den API-Key abgelehnt → beim nächsten Abruf aus der Datei neu lesen
 
     @property
     def hc_ready(self) -> bool:
@@ -56,9 +58,15 @@ def _read_json(path: Path) -> dict:
 
 
 def _write_private(path: Path, obj: dict) -> None:
+    """Zugangsdaten atomar und dauerhaft schreiben, von Anfang an nur für den Besitzer lesbar."""
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(obj, indent=1), encoding="utf-8")
-    tmp.chmod(0o600)
+    with contextlib.suppress(FileNotFoundError):
+        tmp.unlink()  # O_EXCL: nie in eine fremde, schon offene Datei schreiben
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(obj, indent=1))
+        fh.flush()
+        os.fsync(fh.fileno())
     tmp.replace(path)
 
 
@@ -172,6 +180,9 @@ async def setup_beszel(base_url: str, admin_email: str, admin_password: str, cli
 async def ensure(creds: Credentials, env=os.environ) -> Credentials:
     """Fehlende Zugänge nachladen bzw. einrichten. Fehler landen in creds.errors, nie als Ausnahme."""
     fresh = load(env)
+    if creds.hc_rejected and fresh.hc_api_key:
+        # Healthchecks hat den Key abgelehnt (z. B. neu aufgesetzt, neue Keys von healthchecks-init): neu einlesen
+        creds.hc_api_key, creds.hc_ping_key, creds.hc_rejected = fresh.hc_api_key, fresh.hc_ping_key or creds.hc_ping_key, False
     creds.hc_api_key = creds.hc_api_key or fresh.hc_api_key
     creds.hc_ping_key = creds.hc_ping_key or fresh.hc_ping_key
     if not creds.hc_ready:
