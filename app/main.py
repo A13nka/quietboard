@@ -1123,9 +1123,12 @@ def require_token(request: Request, *, installer: bool = False) -> dict:
     return who
 
 
-def _token_ok(*given: str) -> bool:
-    """Für den Token im Pfad (Bridge): gemeinsames Token oder Host-Token."""
+def _token_ok(*given: str, request: Request | None = None) -> bool:
+    """Für den Token im Pfad (Bridge): gemeinsames Token oder Host-Token. Nutzung des gemeinsamen Tokens wird wie
+    bei `require_token` vermerkt, damit die Liste vor dem Abschalten auch Bridges zeigt."""
     who = _identity(*given)
+    if who and who["kind"] == "legacy" and request is not None:
+        _note_legacy(request)
     return bool(who) and who["kind"] != "installer"
 
 
@@ -1525,7 +1528,7 @@ async def ingest_notify(request: Request):
 async def ingest_signal_compat(token: str, request: Request):
     """Drop-in für Absender, die signal-api erwarten (z. B. dockhand-signal-bridge).
     SIGNAL_API_URL=http://<server>:8088/api/ingest/signal/<INGEST_TOKEN>  (Bridge hängt /v2/send an)."""
-    if not _token_ok(token):
+    if not _token_ok(token, request=request):
         raise HTTPException(401, "Token fehlt oder falsch")
     b = await _json_or_text(request)
     message = str(b.get("message", ""))

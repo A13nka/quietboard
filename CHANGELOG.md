@@ -6,6 +6,11 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Behoben
+- Die Liste „Zuletzt mit dem gemeinsamen Token“ (System → Melde-Tokens) zeigt jetzt auch Absender über den
+  Signal-Weg (`/api/ingest/signal/<Token>`, z. B. Dockhand-Bridge). Vorher fehlten sie dort, und nach dem Abschalten
+  des gemeinsamen Tokens wären ihre Meldungen unbemerkt ausgeblieben.
+
 ## 0.9.0 – 2026-11-27
 
 ### Hinweis zur Anbindung der Hosts
