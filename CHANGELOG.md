@@ -6,6 +6,8 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+## 0.9.2 – 2026-11-27
+
 ### Hinweis zum Update
 - `compose.yaml` neu herunterladen: Der App-Container läuft jetzt gehärtet (Dateisystem nur lesbar, keine
   Linux-Capabilities, `no-new-privileges`). Geschrieben wird weiterhin nur nach `/data`.
