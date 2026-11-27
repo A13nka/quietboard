@@ -16,6 +16,8 @@ set -euo pipefail
 if [ "${1:-}" = --env ] && [ -r "${2:-}" ]; then
   # shellcheck disable=SC1090
   . "$2"
+  # exportieren, damit auch synology-setup.sh (eigener Prozess) die Werte sieht
+  for v in ${!QB_@}; do export "${v?}"; done
 fi
 BESZEL_VERSION=0.21.2
 # Prüfsummen aus beszel_0.21.2_checksums.txt des Beszel-Releases (bei neuer Version mit anpassen)
@@ -24,7 +26,7 @@ declare -A BESZEL_SHA256=(
   [arm64]=4f5dcea27c3f9e2ba30218e7d7039f4df548ded1c470df9eefe00975722aad13
   [arm]=57075d4ae419a50d5d378a23dbc40fef12cf9dedaa4fd2f3fce23620d6ca0a3f
 )
-for v in QB_PING_BASE QB_PING_KEY QB_INGEST_URL QB_INGEST_TOKEN QB_HUB_URL QB_AGENT_KEY QB_AGENT_TOKEN; do
+for v in QB_PING_BASE QB_PING_KEY QB_INGEST_URL QB_HUB_URL QB_AGENT_KEY QB_AGENT_TOKEN; do
   [ -n "${!v:-}" ] || { echo "$v fehlt – Installer bitte über die quietboard-App abrufen" >&2; exit 1; }
 done
 # Name: ausdrücklich gesetzt > bisheriger Name aus /etc/hc.conf (bestehende Hosts nicht umbenennen) > hostname -s klein
@@ -37,10 +39,36 @@ QB_AGENT_MODE=${QB_AGENT_MODE:-auto}
 QB_SECURITY_UPDATES=${QB_SECURITY_UPDATES:-1}
 here=$(cd "$(dirname "$0")" && pwd)
 [ "$(id -u)" = 0 ] || { echo "Bitte als root ausführen (sudo bash)" >&2; exit 1; }
+
+# Eigenes Melde-Token für diesen Host holen (gilt nur für seinen Namen). Rückfall: das gemeinsame Token, falls der
+# Befehl damit aufgerufen wurde. Der Token geht per Header-Datei an curl, nicht über die Kommandozeile.
+registered=0
+qb_register() {
+  [ "$registered" = 1 ] && return 0
+  if [ -n "${QB_REGISTER_URL:-}" ] && [ -n "${QB_INSTALL_TOKEN:-}" ] && command -v curl >/dev/null; then
+    local hdr tok
+    hdr=$(mktemp); chmod 600 "$hdr"
+    printf 'Authorization: Bearer %s\n' "$QB_INSTALL_TOKEN" > "$hdr"
+    tok=$(curl -fsS -m 20 -H @"$hdr" -H 'Content-Type: application/json' --data-binary "{\"host\":\"$QB_HOST\"}" \
+      "$QB_REGISTER_URL" 2>/dev/null | sed -n 's/.*"token": *"\(qbh_[A-Za-z0-9_-]*\)".*/\1/p') || true
+    rm -f "$hdr"
+    if [ -n "$tok" ]; then
+      QB_INGEST_TOKEN=$tok; export QB_INGEST_TOKEN
+      echo "QuietBoard: eigenes Melde-Token für $QB_HOST erhalten"
+      registered=1
+      return 0
+    fi
+    echo "QuietBoard: Anmeldung des Hosts fehlgeschlagen${QB_INGEST_TOKEN:+ – nutze das gemeinsame Token}" >&2
+  fi
+  [ -n "${QB_INGEST_TOKEN:-}" ] || { echo "Kein Melde-Token – Befehl aus \"Host hinzufügen\" neu abrufen (Installer-Token gilt 1 h)" >&2; exit 1; }
+  registered=1
+}
+
 # Synology (DSM): kein apt/systemd-Unit-Weg – eigenes Skript (Agent behalten oder als Container)
-if [ -f /etc/synoinfo.conf ]; then exec bash "$here/synology-setup.sh"; fi
+if [ -f /etc/synoinfo.conf ]; then qb_register; exec bash "$here/synology-setup.sh"; fi
 command -v apt-get >/dev/null || { echo "Nur Debian/Ubuntu werden unterstützt" >&2; exit 1; }
-command -v curl >/dev/null || { apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null; }
+command -v curl >/dev/null || { apt-get update -qq -o DPkg::Lock::Timeout=300 && apt-get install -y -qq -o DPkg::Lock::Timeout=300 curl ca-certificates >/dev/null; }
+qb_register
 if [ "$QB_AGENT_MODE" = auto ]; then
   if command -v docker >/dev/null && docker info >/dev/null 2>&1; then QB_AGENT_MODE=docker; else QB_AGENT_MODE=binary; fi
 fi

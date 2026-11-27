@@ -56,13 +56,15 @@ def test_route_guard_rejects_without_user():
 
 
 # ---------------------------------------------------------------- Vertraute Proxys
-def _through_shield(spec: str, client: str, headers: dict) -> dict:
+def _through_shield(spec: str, client: str, headers: dict, cf: str = "") -> dict:
     seen = {}
 
     async def app(scope, receive, send):
         seen.update(client=scope["client"][0], scheme=scope["scheme"], peer=scope["qb_peer"])
+        if scope["qb_untrusted_forward"]:
+            seen["untrusted"] = True
 
-    mw = security.ShieldMiddleware(app, security.TrustedProxies(spec))
+    mw = security.ShieldMiddleware(app, security.TrustedProxies(spec), security.TrustedProxies(cf) if cf else None)
     scope = {
         "type": "http",
         "scheme": "http",
@@ -76,13 +78,16 @@ def _through_shield(spec: str, client: str, headers: dict) -> dict:
 
 def test_forwarded_headers_ignored_from_untrusted_peer():
     s = _through_shield("172.30.0.0/24", "203.0.113.9", {"x-forwarded-for": "172.18.0.4", "x-forwarded-proto": "https"})
-    assert s == {"client": "203.0.113.9", "scheme": "http", "peer": "203.0.113.9"}
+    assert s == {"client": "203.0.113.9", "scheme": "http", "peer": "203.0.113.9", "untrusted": True}
 
 
 def test_forwarded_headers_from_trusted_proxy():
     s = _through_shield("172.30.0.0/24", "172.30.0.5", {"x-forwarded-for": "1.2.3.4, 198.51.100.7", "x-forwarded-proto": "https"})
     assert s == {"client": "198.51.100.7", "scheme": "https", "peer": "172.30.0.5"}  # letzter Eintrag = vom Proxy
+    # CF-Connecting-IP nur von Cloudflare (cloudflared) – hinter anderen Proxys könnte der Client ihn selbst setzen
     s = _through_shield("172.30.0.0/24", "172.30.0.5", {"cf-connecting-ip": "198.51.100.8", "x-forwarded-for": "1.2.3.4"})
+    assert s["client"] == "1.2.3.4"
+    s = _through_shield("172.30.0.0/24", "172.30.0.5", {"cf-connecting-ip": "198.51.100.8", "x-forwarded-for": "1.2.3.4"}, cf="172.30.0.5")
     assert s["client"] == "198.51.100.8"
 
 
@@ -144,14 +149,22 @@ def test_failure_keys_are_capped(monkeypatch):
     assert len(s._failures) <= 20
 
 
-def test_account_lock_independent_of_address():
+def test_account_attack_slows_but_does_not_lock_out(monkeypatch):
+    """Viele Fehlversuche von verschiedenen Adressen: das Konto wird gebremst (ein Versuch je 30 s), nicht gesperrt –
+    der echte Benutzer kommt mit richtigem Passwort weiter hinein (Review 3a M2: Dauersperre von außen)."""
     s = auth.Store(main.DATA / f"t-{secrets.token_hex(3)}.db")
     s.create_user("b@example.org", "geheim-geheim-1", "admin")
+    t = [1000.0]
+    monkeypatch.setattr(auth.time, "time", lambda: t[0])
     for i in range(auth.FAIL_PER_ACCOUNT):
         with pytest.raises(auth.AuthError):
             s.login("b@example.org", "falsch-falsch", f"4.4.4.{i}")
-    with pytest.raises(auth.AuthError, match="Zu viele"):
+    with pytest.raises(auth.AuthError):  # erster gebremster Versuch: falsch
+        s.login("b@example.org", "falsch-falsch", "4.4.5.1")
+    with pytest.raises(auth.AuthError, match="30 Sekunden"):  # sofort danach: gebremst, auch mit richtigem Passwort
         s.login("b@example.org", "geheim-geheim-1", "5.5.5.5")
+    t[0] += auth.ACCOUNT_SLOW_SECONDS + 1
+    assert s.login("b@example.org", "geheim-geheim-1", "5.5.5.5")["email"] == "b@example.org"
 
 
 def test_setup_code_changes_after_too_many_tries():
@@ -275,3 +288,20 @@ def test_outgoing_request_log_hides_ping_key_and_push_endpoint(caplog):
     assert "abcdefghijklmnopqrstuv" not in text and "/ping/***/quietboard-app" in text
     assert "FAKEendpointAbCdEf" not in text and "https://web.push.apple.com/***" in text
     assert "https://pbs.lan:8007/api2/json/status" in text
+
+
+def test_login_body_limit_is_small():
+    """Große JSON-Körper an die Anmelderouten (ohne Konto erreichbar) werden vor dem Einlesen abgewiesen."""
+    c = TestClient(main.app)
+    r = c.post("/api/auth/login", content=b'{"email":"' + b"a" * 20_000 + b'"}', headers={"Content-Type": "application/json"})
+    assert r.status_code == 413
+    assert security.body_limit("/api/config/import") > 500_000
+
+
+def test_no_auth_mode_still_blocks_cross_site_writes(monkeypatch):
+    """Review 3a M5: ALLOW_NO_AUTH schaltete auch den Schutz gegen fremde Seiten ab."""
+    monkeypatch.setattr(main, "ALLOW_NO_AUTH", True)
+    c = TestClient(main.app)
+    r = c.put("/api/settings", json={"digest_time": "07:00"}, headers={"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"})
+    assert r.status_code == 403
+    assert c.put("/api/settings", json={"digest_time": "07:00"}).status_code == 200  # Skript ohne Origin

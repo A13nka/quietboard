@@ -68,3 +68,7 @@ sudo QB_PING_BASE=http://<server>:8000/ping QB_INGEST_URL=http://<server>:8088/a
 ```
 
 The old versions stay as `*.bak-qb`. To go back: `sudo bash …/upgrade-host.sh --rollback`.
+
+**Own report token (server v0.9 or newer):** `--register` in addition to `--apply` fetches a token for this host only
+and writes it to `/etc/hc.conf`. By default the script signs in with the current token. If the shared token is
+already turned off, pass an installer token from the app: `sudo QB_INSTALL_TOKEN=qbi_… bash …`.

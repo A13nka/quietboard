@@ -251,3 +251,46 @@ def test_hc_error_with_msg_placeholder():
     resp = httpx.Response(400, json={"error": "invalid cron"}, request=httpx.Request("POST", "http://hc/api"))
     e = main._hc_error(httpx.HTTPStatusError("x", request=resp.request, response=resp))
     assert e.status_code == 400 and e.detail == "Healthchecks lehnt ab: invalid cron" and e.msg_args == {"msg": "invalid cron"}
+
+
+def test_switch_back_to_hc_gives_channelless_jobs_their_integrations(client, monkeypatch):
+    """Review 3b H2: Jobs aus dem Modus „QuietBoard“ blieben nach dem Zurückschalten ohne Integration."""
+    calls = []
+
+    class R:
+        def __init__(self, j):
+            self._j = j
+
+        def json(self):
+            return self._j
+
+    checks = [
+        {"uuid": "11111111-1111-1111-1111-111111111111", "tags": "host:web01 prio:normal", "channels": ""},
+        {"uuid": "22222222-2222-2222-2222-222222222222", "tags": "host:web01 prio:normal", "channels": "c1"},
+        {"uuid": "33333333-3333-3333-3333-333333333333", "tags": "host:quietboard src:app", "channels": ""},
+    ]
+
+    async def fake_hc(method, path, **kw):
+        calls.append((method, path, kw.get("json")))
+        if path == "/api/v3/checks/":
+            return R({"checks": checks})
+        if path == "/api/v3/channels/":
+            return R({"channels": [{"name": "E-Mail", "id": "mail-id"}]})
+        return R({})
+
+    monkeypatch.setattr(main, "_hc", fake_hc)
+    main.STORE.set_setting("job_alerts", "app")
+    try:
+        assert client.put("/api/settings", json={"job_alerts": "hc"}).status_code == 200
+    finally:
+        main.STORE.set_setting("job_alerts", None)
+    posts = [c for c in calls if c[0] == "POST"]
+    assert posts == [("POST", "/api/v3/checks/11111111-1111-1111-1111-111111111111", {"channels": "mail-id"})]
+
+
+def test_deleting_user_removes_their_push_devices(client, monkeypatch):
+    monkeypatch.setattr(main, "_save", lambda *a: None)
+    u = main.STORE.create_user("weg@example.org", "langes-passwort-9", "viewer")
+    monkeypatch.setattr(main, "push_subs", {"https://a/1": {"owner": "weg@example.org"}, "https://a/2": {"owner": "bleibt@example.org"}})
+    assert client.delete(f"/api/users/{u['id']}").status_code == 200
+    assert list(main.push_subs) == ["https://a/2"]

@@ -141,3 +141,38 @@ def test_upgrade_apply_and_rollback(tmp_path):
     assert hc.read_text() == "#!/bin/sh\necho alt\n"
     assert "| hc ping pve-backup log\n" in (tmp_path / "etc" / "cron.d" / "backup").read_text()
     assert not list(tmp_path.rglob("*.bak-qb"))
+
+
+def test_upgrade_register_replaces_only_the_token(tmp_path):
+    got = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            got.append((self.path, self.headers.get("Authorization"), self.rfile.read(n).decode()))
+            body = b'{"host": "web01", "token": "qbh_NEU123"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        _legacy_host(tmp_path)
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        env = {"QB_PING_BASE": f"{base}/ping", "QB_INGEST_URL": f"{base}/api/ingest/updates"}
+        out = _upgrade(tmp_path, "--apply", "--register", **env)
+        assert out.returncode == 0, out.stdout + out.stderr
+        assert got and got[0][0] == "/api/install/register" and got[0][1] == "Bearer tok" and '"host":"web01"' in got[0][2]
+        conf = (tmp_path / "etc" / "hc.conf").read_text().splitlines()
+        assert "STATUS_INGEST_TOKEN='qbh_NEU123'" in conf and "STATUS_INGEST_TOKEN=tok" not in conf
+        assert "MAILCOW_DIR=/opt/x" in conf and "STATUS_HOST=web01" in conf
+        assert _upgrade(tmp_path, "--rollback").returncode == 0
+        assert (tmp_path / "etc" / "hc.conf").read_text() == LEGACY_CONF
+    finally:
+        srv.shutdown()

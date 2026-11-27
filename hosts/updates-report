@@ -40,7 +40,8 @@ else
     old=$(sed -n 's/^Inst [^ ]* \[\([^]]*\)\].*/\1/p' <<<"$line")
     new=$(sed -n 's/^Inst [^(]*(\([^ ]*\) .*/\1/p' <<<"$line")
     # Security nur aus dem Quellen-Teil in Klammern, nicht aus dem Paketnamen
-    src=$(sed -n 's/^Inst [^(]*([^ ]* \(.*\))$/\1/p' <<<"$line")
+    # (bis zur ersten schließenden Klammer – dahinter kann apt noch „[abhängig:amd64 ]“ anhängen)
+    src=$(sed -n 's/^Inst [^(]*([^ ]* \([^)]*\)).*/\1/p' <<<"$line")
     sec=false; grep -qi 'security' <<<"$src" && sec=true
     items+="${items:+,}{\"pkg\":\"$pkg\",\"from\":\"$old\",\"to\":\"$new\",\"security\":$sec}"
   done < <(grep '^Inst ' <<<"$sim")

@@ -414,3 +414,30 @@ def test_push_payload_limited_by_bytes():
     data = push.payload({"title": "🔴" * 100, "body": "🔥" * 1500, "url": "/"})
     assert len(data) <= push.MAX_PAYLOAD
     assert json.loads(data)["title"]
+
+
+def test_undelivered_outage_that_recovers_forgets_its_start(transitions):
+    """Review 3b M3: Ausfall nie zugestellt, Job wieder grün → kein „War 3 d ausgefallen“ beim nächsten Mal."""
+    sent, _, fake = transitions
+    _set("up")
+    fake.ok = False
+    _set("down")
+    assert "j1" in main.alert_state["down_since"]
+    _set("up")
+    assert "j1" not in main.alert_state["down_since"]
+
+
+def test_sec_overdue_alert_retried_until_delivered(transitions, monkeypatch):
+    """Review 3a/3b: Meldung „Security-Update überfällig“ wurde vor dem Senden als erledigt gemerkt."""
+    sent, _, fake = transitions
+    monkeypatch.setattr(main, "flags", {})
+    monkeypatch.setattr(main, "host_updates", lambda: [{"host": "web01", "sec_overdue": 1, "sec_overdue_pkgs": ["openssl"]}])
+    fake.ok = False
+    run(main.check_sec_overdue())
+    assert not main.flags.get("web01", {}).get("sec_alerted")
+    fake.ok = True
+    run(main.check_sec_overdue())
+    assert main.flags["web01"]["sec_alerted"] == "openssl"
+    n = len(sent)
+    run(main.check_sec_overdue())
+    assert len(sent) == n  # einmal reicht

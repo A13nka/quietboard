@@ -39,6 +39,23 @@ run the command in the LAN, through a VPN or over HTTPS ([Network](../install/ne
     effectively has root rights. If you do not want that: `QB_AGENT_MODE=docker` (socket mounted read-only) or remove
     the user afterwards with `gpasswd -d beszel docker`.
 
+### Report token per host
+
+Every host gets its **own report token** during installation (`STATUS_INGEST_TOKEN` in `/etc/hc.conf`, starts with
+`qbh_`). It is only valid for reports under its own name and for messages. It cannot load the installer with the
+credentials for all hosts, so a compromised host cannot fake the updates of other hosts.
+
+- **Existing hosts** with the shared `INGEST_TOKEN` keep working. To get their own token: run the command from “Add
+  host” again, or for hosts set up by hand `sudo bash …/upgrade-host.sh --apply --register`
+  ([Updating](../install/update.md)).
+- **System → Host report tokens** lists all tokens with “last used”. You can revoke them there.
+- **Turn off the shared token:** same place. Check first who still uses it – the list below it shows the latest
+  senders, e.g. PVE webhooks or bridges. Afterwards the command from “Add host” contains an installer token that
+  expires after one hour.
+- **Webhooks** (PVE/PBS, bridges) can use a host's token instead of the shared one.
+
+The Healthchecks ping key still applies to the whole project: Healthchecks only has one per project.
+
 ### What QuietBoard sets up per host automatically
 
 - **Alerts in Beszel:** status (offline for 5 minutes), disk > 90 % (10 min), RAM > 95 % (15 min). Beszel reports to QuietBoard, QuietBoard notifies via push/mail/Signal. Adjust them in the Beszel interface.

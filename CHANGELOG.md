@@ -6,6 +6,49 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Hinweis zur Anbindung der Hosts
+Abwärtskompatibel: Hosts mit älteren Skripten und das gemeinsame `INGEST_TOKEN` funktionieren unverändert weiter.
+
+- **Neu angebundene Hosts** bekommen bei der Installation ein **eigenes Melde-Token**. Es gilt nur für ihren
+  eigenen Namen und lädt keinen Installer.
+- **Bestehende Hosts** holen es sich mit `upgrade-host.sh --apply --register`. Dabei ändert sich nur der Wert von
+  `STATUS_INGEST_TOKEN` in `/etc/hc.conf`.
+- Unter *System → Melde-Tokens der Hosts* stehen alle Tokens. Dort lässt sich das gemeinsame Token abschalten,
+  sobald es niemand mehr nutzt (die Liste zeigt, wer es zuletzt benutzt hat).
+
+### Neu
+- Tokens je Host:
+  - Ein übernommener Host kann keine Berichte mehr für andere Hosts schicken und den Installer mit allen Zugangsdaten
+    nicht laden.
+  - Ist das gemeinsame Token abgeschaltet, enthält der Befehl aus „Host hinzufügen“ ein Installer-Token, das nach
+    1 h abläuft.
+- Warnung (Log und System), wenn ein Proxy vor der App sitzt, der nicht in `TRUSTED_PROXIES` steht.
+- CI prüft die festgelegten Pakete mit `pip-audit`.
+
+### Behoben
+- Sicherheit:
+  - FastAPI/starlette, uvicorn, PyJWT und PyYAML auf aktuelle Versionen mit bekannten Lücken-Behebungen.
+  - Enge Größengrenzen für Anfragen: Ein großer JSON-Körper an die Anmeldung konnte die App ohne Konto zum Absturz
+    bringen. Das Speicherlimit der App steigt auf 192 MB.
+  - `CF-Connecting-IP` gilt nur noch von `cloudflared` (`CLOUDFLARE_PROXIES`). Hinter Nginx Proxy Manager & Co.
+    konnte ein Client seine Adresse sonst selbst wählen.
+  - Viele Fehlversuche auf ein Konto bremsen es (ein Versuch je 30 s), statt es zu sperren – sonst ließe es sich von
+    außen dauerhaft blockieren.
+  - Push-Geräte werden beim Abmelden und beim Löschen eines Kontos entfernt.
+  - Auch ohne Anmeldung (`ALLOW_NO_AUTH`, nur für Tests) werden schreibende Anfragen fremder Seiten abgewiesen.
+- Alarme:
+  - Nach dem Zurückschalten der Job-Alarme auf Healthchecks bekommen Jobs, die im Modus „QuietBoard“ angelegt
+    wurden, wieder Integrationen.
+  - „Security-Update überfällig“ wird wiederholt, bis die Meldung zugestellt ist.
+  - Ein nie zugestellter, von selbst behobener Ausfall führt später nicht mehr zu „War 3 d ausgefallen“.
+  - Ein gelöschtes Lebenszeichen `quietboard/app` wird neu angelegt (`HEARTBEAT=0` schaltet es ab).
+- Hosts:
+  - Der Synology-Installer funktioniert auch über sudo.
+  - Den Host-Befehl erneut ausführen, während `unattended-upgrades` läuft, bricht nicht mehr ab (apt wartet bis 5 min auf die Sperre).
+  - `updates-report` erkennt Security-Updates auch, wenn apt hinter der Quelle noch Abhängigkeiten anhängt.
+- Ein Fehler von Docker Hub (z. B. 429) löscht keine bekannten Image-Updates mehr.
+- Doku: Ein Proxy direkt auf dem Server braucht das Gateway des Docker-Netzes in `TRUSTED_PROXIES`.
+
 ## 0.8.0 – 2026-11-26
 
 Nur der Server ändert sich; Hosts brauchen nichts.
