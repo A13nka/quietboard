@@ -1,5 +1,5 @@
 # Basis auf Patch-Stand und Digest festgelegt; Dependabot schlägt Aktualisierungen vor (.github/dependabot.yml)
-FROM python:3.13.18-slim@sha256:7249d5587b78209a006dc4a3b5340678f84ea729239193aa559962cd8c1fce50
+FROM python:3.15.1-slim@sha256:533b0b2f9b5d46fd097091cf826f27902f1d6c3bca714b6dc74551356aa97a51
 ARG VERSION=dev
 ENV APP_VERSION=$VERSION
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
