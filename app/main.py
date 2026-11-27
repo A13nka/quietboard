@@ -320,6 +320,9 @@ async def check_transitions() -> None:
             continue
         prev = push_state.get(uid)
         if prev == cur:
+            # Nie gemeldeter Ausfall, der sich von selbst erledigt hat: Beginn vergessen (sonst später „War 3 d ausgefallen“)
+            if cur != "down" and since.pop(uid, None):
+                changed = True
             continue
         if cur == "down" and prev != "down":
             since.setdefault(uid, now_.isoformat(timespec="seconds"))
@@ -446,6 +449,8 @@ async def check_watch_images(cli: httpx.AsyncClient) -> None:
         if not cur:
             continue
         repo = image if "/" in image else f"library/{image}"
+        # schon hier als gesehen merken: ein Fehler von Docker Hub (z. B. 429) darf bekannte Updates nicht löschen
+        seen.add(f"{w.get('host', 'registry')}|{w.get('kind', 'docker')}:{w.get('label', image)}")
         try:
             r = await cli.get(f"https://hub.docker.com/v2/repositories/{repo}/tags", params={"page_size": 100, "ordering": "last_updated"})
             r.raise_for_status()
@@ -633,9 +638,12 @@ async def ensure_job_alert_mode() -> None:
 
 async def ensure_heartbeat() -> None:
     """Check quietboard/app anlegen: QuietBoard pingt ihn bei jedem Abruf. Bleibt der Ping aus, meldet Healthchecks
-    selbst über seine Integrationen – so fällt auch ein Ausfall von QuietBoard auf. Wird nur einmal angelegt."""
-    if state.get("heartbeat") or not (CREDS.hc_api_key and CREDS.hc_ping_key) or STORE.get_setting("heartbeat_created"):
+    selbst über seine Integrationen – so fällt auch ein Ausfall von QuietBoard auf. Fehlt er (gelöscht, Healthchecks
+    neu aufgesetzt), wird er neu angelegt. Abschalten: HEARTBEAT=0 in .env."""
+    if state.get("heartbeat") or not (CREDS.hc_api_key and CREDS.hc_ping_key) or E("HEARTBEAT", "1") == "0":
         return
+    if STORE.get_setting("heartbeat_created"):
+        log.warning("Lebenszeichen %s fehlt in Healthchecks – lege es neu an (abschalten: HEARTBEAT=0)", HEARTBEAT_NAME)
     body = {
         "name": HEARTBEAT_NAME,
         "slug": HEARTBEAT_SLUG,
@@ -751,15 +759,16 @@ async def check_sec_overdue() -> None:
         sig = ",".join(sorted(h["sec_overdue_pkgs"]))
         f = flags.setdefault(name, {})
         if f.get("sec_alerted") != sig:
-            f["sec_alerted"] = sig
-            changed = True
-            await send_signal(
+            sent = await send_signal(
                 "🟠 "
                 + tr("{name}: {n} Security-Update(s) seit über {h} h offen", name=name, n=h["sec_overdue"], h=SEC_GRACE_H)
                 + "\n"
                 + ", ".join(h["sec_overdue_pkgs"][:6]),
                 url="/?t=up",
             )
+            if sent or not channels_configured():  # erst nach Zustellung merken – sonst nächster Abruf erneut
+                f["sec_alerted"] = sig
+                changed = True
     for name, f in flags.items():
         if f.get("sec_alerted") and name not in overdue:
             f.pop("sec_alerted")
@@ -970,15 +979,33 @@ def _has_body(request: Request) -> bool:
     return request.headers.get("content-length", "0") not in ("", "0") or "transfer-encoding" in request.headers
 
 
+WARNINGS: dict = {}  # einmalige Betriebshinweise für System → Übersicht (z. B. nicht eingetragener Proxy)
+
+
 @app.middleware("http")
 async def access_guard(request: Request, call_next):
     # Nicht request.url.path: die URL setzt Starlette aus dem Host-Header zusammen – ein Header wie
     # "Host: x/healthz?" ließe den Wächter einen öffentlichen Pfad sehen. scope["path"] ist, was der Router bedient.
     path = request.scope["path"]
     request.state.user = None
+    if request.scope.get("qb_untrusted_forward") and not WARNINGS.get("untrusted_proxy"):
+        WARNINGS["untrusted_proxy"] = request.scope.get("qb_peer") or "?"
+        log.warning(
+            "Anfrage über einen Proxy (%s), der nicht in TRUSTED_PROXIES steht: X-Forwarded-* werden ignoriert, die "
+            "Verbindung gilt als http (Cookies ohne Secure, Adressen mit http://). Proxy eintragen – Doku: Netzwerk.",
+            WARNINGS["untrusted_proxy"],
+        )
     if _is_public(path):
         return await call_next(request)
     if ALLOW_NO_AUTH:
+        # Ohne Anmeldung (nur für Tests/Demo): Browser-Anfragen fremder Seiten trotzdem abweisen – sonst könnte jede
+        # Webseite über den Browser eines Nutzers im LAN Admin-Aktionen auslösen. Skripte ohne Origin dürfen.
+        if (
+            request.method in UNSAFE
+            and (request.headers.get("origin") or request.headers.get("sec-fetch-site"))
+            and not _same_origin(request)
+        ):
+            return JSONResponse({"detail": "Anfrage von fremder Seite abgelehnt"}, status_code=403)
         request.state.user = {"id": 0, "email": "ohne-anmeldung", "name": "", "role": "admin", "via": "none"}
         return await call_next(request)
     user = _access_user(request)
@@ -1013,7 +1040,11 @@ async def access_guard(request: Request, call_next):
 
 
 # Vor allem anderen (äußerste Schicht): vertraute Proxys, Größenlimit, Sicherheits-Header
-app.add_middleware(security.ShieldMiddleware, trusted=security.TrustedProxies(E("TRUSTED_PROXIES", "cloudflared")))
+app.add_middleware(
+    security.ShieldMiddleware,
+    trusted=security.TrustedProxies(E("TRUSTED_PROXIES", "cloudflared")),
+    cloudflare=security.TrustedProxies(E("CLOUDFLARE_PROXIES", "cloudflared")),
+)
 security.install_log_filter()
 
 
@@ -1038,23 +1069,64 @@ def require_admin(request: Request) -> dict:
     return user
 
 
-def require_token(request: Request) -> None:
-    # Token per Bearer-Header, X-Token-Header oder ?token= (für Absender ohne eigene Header, z. B. Bridges)
+def legacy_ingest_allowed() -> bool:
+    """Gemeinsames INGEST_TOKEN (alle Hosts) – gilt, bis der Admin es unter System abschaltet."""
+    return bool(STORE.get_setting("legacy_ingest_token", True))
+
+
+legacy_use: dict = _load("legacy_use.json", {})  # "<ip> <pfad>" -> letzte Nutzung des gemeinsamen Tokens
+
+
+def _note_legacy(request: Request) -> None:
+    peer = request.scope.get("qb_peer") or (request.client.host if request.client else "?")
+    path = security.mask_tokens(request.url.path)
+    key = f"{peer} {path}"
+    t = now().isoformat(timespec="seconds")
+    if (legacy_use.get(key) or "")[:13] != t[:13]:  # höchstens einmal pro Stunde speichern
+        legacy_use[key] = t
+        for k in sorted(legacy_use, key=legacy_use.get)[:-100]:
+            legacy_use.pop(k)
+        _save("legacy_use.json", legacy_use)
+
+
+def _identity(*given: str) -> dict | None:
+    """Wer meldet? {"kind": "host", "host": name} | {"kind": "installer"} | {"kind": "legacy"} oder None.
+    Das gemeinsame Token wird zeitkonstant verglichen; Host- und Installer-Tokens nur als Hash gespeichert."""
+    for g in given:
+        if not g:
+            continue
+        host = STORE.host_for_token(g)
+        if host:
+            return {"kind": "host", "host": host}
+        if STORE.installer_ok(g):
+            return {"kind": "installer"}
+    if INGEST_TOKEN and legacy_ingest_allowed():
+        want = INGEST_TOKEN.encode()
+        if any([hmac.compare_digest(g.encode(), want) for g in given if g]):
+            return {"kind": "legacy"}
+    return None
+
+
+def require_token(request: Request, *, installer: bool = False) -> dict:
+    """Ingest-Zugang: Token per Bearer-Header, X-Token-Header oder ?token= (für Absender ohne eigene Header, z. B. Bridges).
+    Installer-Tokens gelten nur dort, wo `installer=True` (Host-Installer und Anmeldung)."""
     candidates = (
         request.headers.get("authorization", "").removeprefix("Bearer ").strip(),
         request.headers.get("x-token", ""),
         request.query_params.get("token", ""),
     )
-    if not _token_ok(*candidates):
+    who = _identity(*candidates)
+    if not who or (who["kind"] == "installer" and not installer):
         raise HTTPException(401, "Token fehlt oder falsch")
+    if who["kind"] == "legacy":
+        _note_legacy(request)
+    return who
 
 
 def _token_ok(*given: str) -> bool:
-    """Zeitkonstanter Vergleich mit dem Ingest-Token (jeder Kandidat wird geprüft)."""
-    if not INGEST_TOKEN:
-        return False
-    want = INGEST_TOKEN.encode()
-    return any([hmac.compare_digest(g.encode(), want) for g in given if g])
+    """Für den Token im Pfad (Bridge): gemeinsames Token oder Host-Token."""
+    who = _identity(*given)
+    return bool(who) and who["kind"] != "installer"
 
 
 def _resolve(host: str) -> set[str]:
@@ -1164,15 +1236,22 @@ async def install_host_script(request: Request):
     Als root läuft es direkt, als normaler Benutzer holt es sich die Rechte per sudo.
     Der Token steht im Header, nicht in der URL (sonst landet er im Zugriffslog).
     Optional vor `bash` (z. B. `| QB_HOST=nas bash`): QB_HOST=name, QB_AGENT_MODE=docker|binary, QB_SECURITY_UPDATES=0."""
-    require_token(request)
+    who = require_token(request, installer=True)
+    if who["kind"] == "host":  # ein Host-Token darf keine Zugangsdaten anderer Hosts laden
+        raise HTTPException(403, "Mit einem Host-Token gibt es keinen Installer – Befehl aus „Host hinzufügen“ verwenden")
     if not (CREDS.hc_ping_key and CREDS.agent_token and CREDS.hub_key):
         raise HTTPException(503, "Healthchecks/Beszel noch nicht eingerichtet")
     base = str(request.base_url).rstrip("/")
+    presented = request.headers.get("authorization", "").removeprefix("Bearer ").strip() or request.headers.get("x-token", "")
     values = {
         "QB_PING_BASE": E("HC_PING_ENDPOINT", "").rstrip("/") or f"{urlparse(base).scheme}://{urlparse(base).hostname}:8000/ping",
         "QB_PING_KEY": CREDS.hc_ping_key,
         "QB_INGEST_URL": f"{base}/api/ingest/updates",
-        "QB_INGEST_TOKEN": INGEST_TOKEN,
+        # Der Host holt sich bei der Installation sein eigenes Token (QB_REGISTER_URL). Das gemeinsame Token steht
+        # nur noch als Rückfall drin, wenn der Befehl damit aufgerufen wurde.
+        "QB_INGEST_TOKEN": INGEST_TOKEN if who["kind"] == "legacy" else "",
+        "QB_REGISTER_URL": f"{base}/api/install/register",
+        "QB_INSTALL_TOKEN": presented,
         "QB_HUB_URL": BESZEL_PUBLIC or f"{urlparse(base).scheme}://{urlparse(base).hostname}:8090",
         "QB_AGENT_KEY": CREDS.hub_key,
         "QB_AGENT_TOKEN": CREDS.agent_token,
@@ -1203,6 +1282,46 @@ async def install_host_script(request: Request):
         "",
     ]
     return Response("\n".join(lines), media_type="text/x-shellscript", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/install/register")
+async def install_register(request: Request):
+    """Host anmelden: gibt ein eigenes Melde-Token für genau diesen Host zurück (ein früheres wird ungültig).
+    Mit Installer-Token oder – solange erlaubt – dem gemeinsamen Token. Body: {"host": "<name>"}."""
+    who = require_token(request, installer=True)
+    if who["kind"] == "host":
+        raise HTTPException(403, "Mit einem Host-Token kann kein Host angemeldet werden")
+    b = await _body(request)
+    host = b.get("host")
+    if not isinstance(host, str) or not HOST_RE.fullmatch(host):
+        raise HTTPException(400, "host fehlt oder ungültig")
+    token = STORE.create_host_token(host)
+    log.info("Host %s angemeldet (eigenes Melde-Token, über %s)", host, who["kind"])
+    return {"host": host, "token": token}
+
+
+@app.get("/api/host-tokens")
+async def host_tokens_list(request: Request):
+    require_admin(request)
+    return {"tokens": STORE.list_host_tokens(), "legacy_allowed": legacy_ingest_allowed(), "legacy_use": legacy_use}
+
+
+@app.delete("/api/host-tokens/{host}")
+async def host_tokens_delete(host: str, request: Request):
+    require_admin(request)
+    if not STORE.delete_host_token(host):
+        raise HTTPException(404, "Kein Token für diesen Host")
+    return {"ok": True}
+
+
+@app.post("/api/hosts/installer-token")
+async def install_token(request: Request):
+    """Admin: kurzlebiges Installer-Token (1 h) und den fertigen Befehl für „Host hinzufügen“."""
+    me = require_admin(request)
+    token, expires = STORE.create_installer_token(str(me.get("email") or me.get("id")))
+    base = str(request.base_url).rstrip("/")
+    cmd = f'curl -fsSL -H "Authorization: Bearer {token}" {base}/api/install/host.sh | bash'
+    return {"command": cmd, "expires": dt.datetime.fromtimestamp(expires, TZ).isoformat(timespec="seconds")}
 
 
 @app.get("/api/agent")
@@ -1255,7 +1374,7 @@ async def _json_or_text(request: Request) -> dict:
 @app.post("/api/ingest/updates")
 async def ingest_updates(request: Request):
     """Body: {host, kind: apt|dsm|docker|scanner|mailcow, items: [{pkg, from, to, security}], reboot?: bool}"""
-    require_token(request)
+    who = require_token(request)
     try:
         b = await request.json()
     except Exception:
@@ -1264,6 +1383,8 @@ async def ingest_updates(request: Request):
         raise HTTPException(400, "host fehlt oder ungültig")
     if not isinstance(b.get("items", []), list):
         raise HTTPException(400, "items muss eine Liste sein")
+    if who["kind"] == "host" and b["host"] != who["host"]:
+        raise UserError(403, "Dieses Token gilt nur für den Host {host}", host=who["host"])
     host, kind = b["host"], str(b.get("kind", "apt"))[:20]
     key = f"{host}|{kind}"
     ts = now().isoformat(timespec="seconds")
@@ -1605,12 +1726,19 @@ async def users_update(uid: int, request: Request):
 @app.delete("/api/users/{uid}")
 async def users_delete(uid: int, request: Request):
     me = require_admin(request)
-    if not STORE.get_user(uid):
+    user = STORE.get_user(uid)
+    if not user:
         raise HTTPException(404, "Benutzer nicht gefunden")
     try:
         STORE.delete_user(uid, me.get("id", 0))
     except auth.AuthError as exc:
         raise HTTPException(400, str(exc)) from None
+    # Geräte des gelöschten Kontos bekommen keine Alarme mehr
+    gone = [e for e, s in push_subs.items() if s.get("owner") in (user["email"], str(uid))]
+    for e in gone:
+        push_subs.pop(e)
+    if gone:
+        _save("push.json", push_subs)
     return {"ok": True}
 
 
@@ -1622,6 +1750,7 @@ def _settings() -> dict:
         "channels": {"mail": bool(SMTP["host"]), "push": bool(VAPID), "signal": bool(SIGNAL_NUMBER and SIGNAL_RECIPIENT)},
         "language": i18n.lang(),
         "job_alerts": job_alerts_mode(),
+        "legacy_ingest_token": legacy_ingest_allowed(),
         "hc_channels_backup": (DATA / HC_CHANNELS_BACKUP).exists(),
     }
 
@@ -1685,18 +1814,27 @@ async def settings_put(request: Request):
         if b["language"] not in i18n.LANGUAGES:
             raise HTTPException(400, "Sprache: de oder en")
         STORE.set_setting("language", b["language"])
+    if "legacy_ingest_token" in b:
+        if not isinstance(b["legacy_ingest_token"], bool):
+            raise HTTPException(400, "legacy_ingest_token: true oder false")
+        STORE.set_setting("legacy_ingest_token", b["legacy_ingest_token"])
     if "job_alerts" in b:
         mode = b["job_alerts"]
         if mode not in ("app", "hc"):
             raise HTTPException(400, "Job-Alarme: app oder hc")
+        before = job_alerts_mode()
+        STORE.set_setting("job_alerts", mode)  # vorher setzen: die Kanalwahl für "hc" hängt am Modus
         try:
             if mode == "app" and b.get("detach_hc_channels"):
                 await _detach_hc_channels()
             if mode == "hc" and b.get("restore_hc_channels"):
                 await _restore_hc_channels()
+            if mode == "hc" and before == "app":
+                # Jobs, die im Modus „QuietBoard“ angelegt wurden, haben keine Integration – sonst blieben sie stumm
+                await _fill_empty_channels()
         except httpx.HTTPError as exc:
+            STORE.set_setting("job_alerts", before)
             raise _hc_error(exc) from None
-        STORE.set_setting("job_alerts", mode)
         log.info("Job-Alarme über: %s", "QuietBoard" if mode == "app" else "Healthchecks")
     return _settings()
 
@@ -1720,6 +1858,22 @@ async def _detach_hc_channels() -> int:
         await _hc("POST", f"/api/v3/checks/{uid}", json={"channels": ""})
         n += 1
     log.info("Integrationen von %d Job(s) gelöst, Zuordnung gesichert in %s", n, HC_CHANNELS_BACKUP)
+    return n
+
+
+async def _fill_empty_channels() -> int:
+    """Allen Jobs ohne Integration die Standard-Integrationen ihrer Priorität geben (nicht dem Lebenszeichen)."""
+    n = 0
+    for c in (await _hc("GET", "/api/v3/checks/")).json()["checks"]:
+        uid = c.get("uuid") or c.get("unique_key")
+        if not uid or "src:app" in (c.get("tags") or "").split() or (c.get("channels") or ""):
+            continue
+        ids = await _channel_ids(jobs_mod.prio_of(c))
+        if ids:
+            await _hc("POST", f"/api/v3/checks/{uid}", json={"channels": ids})
+            n += 1
+    if n:
+        log.info("Integrationen für %d Job(s) ohne Kanal gesetzt", n)
     return n
 
 
@@ -1773,6 +1927,7 @@ async def system_info():
             "beszel": {"ok": not bz_err, "detail": bz_err or f"{len(state['hosts'])} Hosts", "url": BESZEL_PUBLIC},
         },
         "push_devices": len(push_subs),
+        "warnings": WARNINGS,
         "heartbeat": state.get("heartbeat"),
         "job_alerts": job_alerts_mode(),
         "auth": "access" if _jwk else ("none" if ALLOW_NO_AUTH else "local"),
@@ -1831,13 +1986,21 @@ async def host_delete(name: str, request: Request):
 
 @app.get("/api/hosts/install-command")
 async def host_install_command(request: Request):
-    """Der eine Befehl für "Host hinzufügen" (enthält den Ingest-Token – nur für Admins)."""
-    require_admin(request)
+    """Der eine Befehl für "Host hinzufügen" – nur für Admins. Solange das gemeinsame Token erlaubt ist, enthält er
+    dieses (gleicher Befehl wie von install.sh); sonst ein Installer-Token, das nach 1 h abläuft.
+    In beiden Fällen holt sich der Host bei der Installation sein eigenes Melde-Token."""
+    me = require_admin(request)
     if not (CREDS.hc_ping_key and CREDS.agent_token and CREDS.hub_key):
         raise HTTPException(503, "Healthchecks/Beszel noch nicht eingerichtet")
     base = str(request.base_url).rstrip("/")
-    cmd = f'curl -fsSL -H "Authorization: Bearer {INGEST_TOKEN}" {base}/api/install/host.sh | bash'
-    return {"command": cmd, "base": base}
+    expires = None
+    if legacy_ingest_allowed() and INGEST_TOKEN:
+        token = INGEST_TOKEN
+    else:
+        token, exp = STORE.create_installer_token(str(me.get("email") or me.get("id")))
+        expires = dt.datetime.fromtimestamp(exp, TZ).isoformat(timespec="seconds")
+    cmd = f'curl -fsSL -H "Authorization: Bearer {token}" {base}/api/install/host.sh | bash'
+    return {"command": cmd, "base": base, "expires": expires}
 
 
 # ---------------------------------------------------------------- Check-Regeln (pausieren, Priorität)

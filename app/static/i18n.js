@@ -245,6 +245,7 @@ window.I18N_EN = {
   "Bisheriges Passwort falsch": "Current password is wrong",
   "E-Mail oder Passwort falsch": "Wrong e-mail or password",
   "Zu viele Fehlversuche – in 15 Minuten erneut versuchen": "Too many failed attempts – try again in 15 minutes",
+  "Viele Fehlversuche auf dieses Konto – bitte 30 Sekunden warten": "Many failed attempts on this account – please wait 30 seconds",
   "Passwort zu kurz (mindestens 10 Zeichen)": "Password too short (at least 10 characters)",
   "Ungültige E-Mail-Adresse": "Invalid e-mail address",
   "Eigenes Konto kann nicht gelöscht werden": "You cannot delete your own account",
@@ -285,5 +286,17 @@ window.I18N_EN = {
   "Healthchecks nicht erreichbar: {e}": "Healthchecks not reachable: {e}",
   "Job {name} gibt es schon": "Job {name} already exists",
   "Ping-Adresse {slug} gehört schon zu {other} – bitte anderen Namen wählen": "Ping address {slug} already belongs to {other} – please choose another name",
-  "YAML fehlerhaft: {e}": "YAML invalid: {e}"
+  "YAML fehlerhaft: {e}": "YAML invalid: {e}",
+  "Anfragen kommen über einen Proxy ({ip}), der nicht in TRUSTED_PROXIES steht – Cookies sind dann nicht „Secure“ und Befehle enthalten http://. Proxy eintragen (Doku: Netzwerk).": "Requests arrive through a proxy ({ip}) that is not in TRUSTED_PROXIES – cookies are then not “Secure” and commands contain http://. Add the proxy (docs: network).",
+  "Dieses Token gilt nur für den Host {host}": "This token is only valid for host {host}",
+  "Gilt bis {t} (Einmal-Token für die Installation).": "Valid until {t} (one-time token for the installation).",
+  "Melde-Tokens der Hosts": "Host report tokens",
+  "zuletzt {t}": "last {t}",
+  "Widerrufen": "Revoke",
+  "Noch kein Host mit eigenem Token – Hosts bekommen es beim nächsten Ausführen des Befehls oben (oder mit upgrade-host.sh --register).": "No host with its own token yet – hosts get one the next time they run the command above (or with upgrade-host.sh --register).",
+  "Gemeinsames Ingest-Token erlauben (ältere Hosts, Webhooks)": "Allow the shared ingest token (older hosts, webhooks)",
+  "Zuletzt mit dem gemeinsamen Token:": "Last uses of the shared token:",
+  "Token von {h} widerrufen? Der Host meldet danach nichts mehr, bis er ein neues hat.": "Revoke the token of {h}? The host reports nothing until it has a new one.",
+  "Gemeinsames Token abschalten? Hosts und Webhooks, die es noch nutzen, werden dann abgewiesen.": "Turn off the shared token? Hosts and webhooks still using it will be rejected.",
+  "Mit einem Host-Token gibt es keinen Installer – Befehl aus „Host hinzufügen“ verwenden": "A host token cannot load the installer – use the command from “Add host”"
 };

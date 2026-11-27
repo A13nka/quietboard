@@ -93,7 +93,7 @@ services:
       - ./config:/config:ro
       - status-data:/data
       - bootstrap:/bootstrap:ro
-    mem_limit: 128m
+    mem_limit: 192m   # scrypt (2× 16 MB) und große Meldungen brauchen Luft
 
   healthchecks-init:
     image: healthchecks/healthchecks:v5.0.3

@@ -28,7 +28,8 @@ MIN_PASSWORD = 10
 MAX_PASSWORD = 1024  # scrypt über riesige Eingaben wäre eine billige Last für Angreifer
 FAIL_WINDOW = 900  # Sekunden
 FAIL_PER_CLIENT = 10  # Fehlversuche je Adresse+Konto bzw. je Adresse im Fenster
-FAIL_PER_ACCOUNT = 20  # Fehlversuche je Konto im Fenster, unabhängig von der Adresse
+FAIL_PER_ACCOUNT = 20  # Fehlversuche je Konto im Fenster, unabhängig von der Adresse – danach nur noch gebremst
+ACCOUNT_SLOW_SECONDS = 30  # gebremstes Konto: höchstens ein Versuch je 30 s (keine Dauersperre von außen)
 FAIL_KEYS_MAX = 5000  # Obergrenze der gemerkten Schlüssel (Speicher)
 SETUP_CODE_TRIES = 20  # danach neuer Einrichtungscode
 _SCRYPT = {"n": 2**14, "r": 8, "p": 1}
@@ -107,6 +108,11 @@ class Store:
                 CREATE TABLE IF NOT EXISTS api_tokens (
                     id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, name TEXT NOT NULL, token_hash TEXT UNIQUE NOT NULL,
                     hint TEXT NOT NULL, created REAL NOT NULL, last_used REAL);
+                CREATE TABLE IF NOT EXISTS host_tokens (
+                    host TEXT PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL, hint TEXT NOT NULL,
+                    created REAL NOT NULL, last_used REAL);
+                CREATE TABLE IF NOT EXISTS installer_tokens (
+                    token_hash TEXT PRIMARY KEY, created REAL NOT NULL, expires REAL NOT NULL, created_by TEXT NOT NULL DEFAULT '');
                 """
             )
         try:
@@ -116,6 +122,7 @@ class Store:
         self.setup_code: str | None = None
         self._setup_tries = 0
         self._failures: dict[str, list[float]] = {}
+        self._acct_last: dict[str, float] = {}
         self._fail_lock = threading.Lock()
 
     # ------------------------------------------------------------ Hilfen
@@ -250,13 +257,19 @@ class Store:
         keys = (f"c|{client}|{email}", f"c|{client}", f"a|{email}")
         now = time.time()
         with self._fail_lock:
-            limited = (
-                self._count(keys[0], now) >= FAIL_PER_CLIENT
-                or self._count(keys[1], now) >= FAIL_PER_CLIENT
-                or self._count(keys[2], now) >= FAIL_PER_ACCOUNT
-            )
+            limited = self._count(keys[0], now) >= FAIL_PER_CLIENT or self._count(keys[1], now) >= FAIL_PER_CLIENT
+            # Viele Fehlversuche auf ein Konto von verschiedenen Adressen: nicht sperren (sonst könnte jeder von außen
+            # das Konto dauerhaft blockieren), sondern bremsen – ein Versuch je ACCOUNT_SLOW_SECONDS für alle.
+            slowed = False
+            if not limited and self._count(keys[2], now) >= FAIL_PER_ACCOUNT:
+                last = self._acct_last.get(email, 0.0)
+                slowed = now - last < ACCOUNT_SLOW_SECONDS
+                if not slowed:
+                    self._acct_last[email] = now
         if limited:
             raise AuthError("Zu viele Fehlversuche – in 15 Minuten erneut versuchen")
+        if slowed:
+            raise AuthError("Viele Fehlversuche auf dieses Konto – bitte 30 Sekunden warten")
         rows = self._q("SELECT id, pw_hash FROM users WHERE email=?", (email,))
         # Unbekanntes Konto: gleich teure Prüfung gegen einen festen Hash (keine Rückschlüsse über die Laufzeit)
         ok = verify_password(password, rows[0]["pw_hash"] if rows else dummy_hash()) and bool(rows)
@@ -335,6 +348,51 @@ class Store:
         user = dict(rows[0])
         user.pop("tid")
         return user | {"via": "token"}
+
+    # ------------------------------------------------------------ Host- und Installer-Tokens
+    def create_host_token(self, host: str) -> str:
+        """Neues Melde-Token für genau einen Host; ein vorhandenes für denselben Host wird ungültig."""
+        token = "qbh_" + secrets.token_urlsafe(32)
+        self._x(
+            "INSERT INTO host_tokens(host, token_hash, hint, created) VALUES (?,?,?,?) "
+            "ON CONFLICT(host) DO UPDATE SET token_hash=excluded.token_hash, hint=excluded.hint, created=excluded.created, last_used=NULL",
+            (host, _token_hash(token), token[:8] + "…" + token[-4:], time.time()),
+        )
+        return token
+
+    def host_for_token(self, token: str | None) -> str | None:
+        if not token or not token.startswith("qbh_"):
+            return None
+        rows = self._q("SELECT host FROM host_tokens WHERE token_hash=?", (_token_hash(token),))
+        if not rows:
+            return None
+        self._x("UPDATE host_tokens SET last_used=? WHERE host=?", (time.time(), rows[0]["host"]))
+        return rows[0]["host"]
+
+    def list_host_tokens(self) -> list[dict]:
+        return [dict(r) for r in self._q("SELECT host, hint, created, last_used FROM host_tokens ORDER BY host")]
+
+    def delete_host_token(self, host: str) -> bool:
+        if not self._q("SELECT 1 FROM host_tokens WHERE host=?", (host,)):
+            return False
+        self._x("DELETE FROM host_tokens WHERE host=?", (host,))
+        return True
+
+    def create_installer_token(self, created_by: str, ttl: float = 3600) -> tuple[str, float]:
+        """Kurzlebiges Token zum Laden des Host-Installers und Anmelden eines Hosts."""
+        t = time.time()
+        self._x("DELETE FROM installer_tokens WHERE expires < ?", (t,))
+        token = "qbi_" + secrets.token_urlsafe(32)
+        self._x(
+            "INSERT INTO installer_tokens(token_hash, created, expires, created_by) VALUES (?,?,?,?)",
+            (_token_hash(token), t, t + ttl, created_by),
+        )
+        return token, t + ttl
+
+    def installer_ok(self, token: str | None) -> bool:
+        if not token or not token.startswith("qbi_"):
+            return False
+        return bool(self._q("SELECT 1 FROM installer_tokens WHERE token_hash=? AND expires >= ?", (_token_hash(token), time.time())))
 
     # ------------------------------------------------------------ Einstellungen
     def get_setting(self, key: str, default=None):

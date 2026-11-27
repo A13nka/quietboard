@@ -40,6 +40,8 @@
 | `TUNNEL_TOKEN` | Cloudflare Tunnel (Profil `tunnel`) |
 | `ACCESS_TEAM`, `ACCESS_AUD` | Cloudflare Access als Anmeldung |
 | `TRUSTED_PROXIES` | Proxys, deren weitergeleitete Header (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) gelten: Containernamen und/oder Netze, Komma-getrennt (Standard `cloudflared`). Von allen anderen werden diese Header ignoriert |
+| `CLOUDFLARE_PROXIES` | Proxys, deren `CF-Connecting-IP` gilt (Standard `cloudflared`). Andere vertraute Proxys liefern die Adresse nur über `X-Forwarded-For` |
+| `HEARTBEAT` | `0` schaltet das Lebenszeichen `quietboard/app` in Healthchecks ab (Standard an; fehlt es, wird es neu angelegt) |
 | `PUBLIC_URL` | Adresse der Oberfläche, z. B. `https://status.example.org` – für Links in Signal- und Mail-Meldungen (optional) |
 | `PUBLIC_ORIGINS` | nur nötig, wenn ein Proxy den `Host`-Header ändert: Adressen der Oberfläche, z. B. `https://status.example.org` |
 | `HC_API_KEY`, `HC_PING_KEY`, `BESZEL_APP_USER`, `BESZEL_APP_PASS` | bestehende Healthchecks/Beszel statt Selbsteinrichtung |

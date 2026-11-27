@@ -17,9 +17,24 @@ import re
 import socket
 import time
 
-BODY_LIMIT = 1_000_000
-INGEST_BODY_LIMIT = 4_000_000
+# Größe des Anfragekörpers je Route. JSON wird beim Einlesen etwa 20-mal so groß (Python-Objekte) – ohne enge
+# Grenze für die Anmelderouten könnte jeder ohne Konto den Container (128 MB) mit wenigen Anfragen sprengen.
+AUTH_BODY_LIMIT = 16_000  # /api/auth/* (Login, Einrichtung) – ohne Anmeldung erreichbar
+IMPORT_BODY_LIMIT = 600_000  # YAML-Import (bis 500 000 Zeichen)
+INGEST_BODY_LIMIT = 1_000_000  # Meldungen von Hosts (PVE-Logs werden ohnehin gekürzt)
+BODY_LIMIT = 64_000  # alles andere
 INGEST_PREFIX = "/api/ingest/"
+
+
+def body_limit(path: str) -> int:
+    if path.startswith("/api/auth/"):
+        return AUTH_BODY_LIMIT
+    if path == "/api/config/import":
+        return IMPORT_BODY_LIMIT
+    if path.startswith(INGEST_PREFIX):
+        return INGEST_BODY_LIMIT
+    return BODY_LIMIT
+
 
 SECURITY_HEADERS = [
     (b"x-frame-options", b"DENY"),
@@ -87,9 +102,12 @@ def _valid_ip(s: str) -> str:
 
 
 class ShieldMiddleware:
-    def __init__(self, app, trusted: TrustedProxies):
+    def __init__(self, app, trusted: TrustedProxies, cloudflare: TrustedProxies | None = None):
         self.app = app
         self.trusted = trusted
+        # CF-Connecting-IP setzt nur Cloudflare (cloudflared). Hinter Nginx Proxy Manager, Caddy & Co. könnte der
+        # Client den Header selbst mitschicken – dort gilt nur X-Forwarded-For.
+        self.cloudflare = cloudflare
 
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
@@ -98,10 +116,11 @@ class ShieldMiddleware:
         peer = (scope.get("client") or ("", 0))[0]
         scope["qb_peer"] = peer
         scope["qb_forwarded_host"] = ""
+        scope["qb_untrusted_forward"] = False
         if peer in self.trusted:
             # Cloudflare liefert die echte Adresse in CF-Connecting-IP; sonst der letzte Eintrag von X-Forwarded-For
             # (den hat der vertraute Proxy selbst angehängt – weiter links steht, was der Client behauptet).
-            client = _valid_ip(_header(headers, b"cf-connecting-ip"))
+            client = _valid_ip(_header(headers, b"cf-connecting-ip")) if self.cloudflare and peer in self.cloudflare else ""
             if not client:
                 xff = [p for p in _header(headers, b"x-forwarded-for").split(",") if p.strip()]
                 client = _valid_ip(xff[-1]) if xff else ""
@@ -111,12 +130,16 @@ class ShieldMiddleware:
             if proto in ("http", "https"):
                 scope["scheme"] = "https" if proto == "https" else "http"
             scope["qb_forwarded_host"] = _header(headers, b"x-forwarded-host").split(",")[0].strip()
+        elif _header(headers, b"x-forwarded-proto") or _header(headers, b"x-forwarded-for"):
+            # Ein Proxy, der nicht in TRUSTED_PROXIES steht: Header werden ignoriert (richtig), aber dann gilt die
+            # Verbindung als http – Cookies ohne Secure, erzeugte Adressen mit http://. Die App warnt darüber.
+            scope["qb_untrusted_forward"] = True
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
 
         path = scope.get("path", "")
         ingest = path.startswith(INGEST_PREFIX)
-        limit = INGEST_BODY_LIMIT if ingest else BODY_LIMIT
+        limit = body_limit(path)
         length = _header(headers, b"content-length")
         if not ingest and length.isdigit() and int(length) > limit:
             await _send_simple(send, 413, b'{"detail":"Anfrage zu gro\\u00df"}')

@@ -10,6 +10,8 @@
 # Optionen zu --apply:
 #   --fix-stdin   Stellen, die Text in "hc ping" pipen, um " -" ergänzen (sonst fehlt dort künftig der Text)
 #   --no-report   updates-report danach nicht gleich ausführen
+#   --register    eigenes Melde-Token für diesen Host holen (ab Server v0.9) und in /etc/hc.conf eintragen; nutzt
+#                 QB_INSTALL_TOKEN (Installer-Token aus der App) oder, solange erlaubt, das bisherige gemeinsame Token
 # Fehlt HC_PING_BASE oder STATUS_INGEST_URL in /etc/hc.conf (ältere Skripte hatten dafür einen eingebauten Standard),
 # die Werte mitgeben:
 #   sudo QB_PING_BASE=http://<server>:8000/ping QB_INGEST_URL=http://<server>:8088/api/ingest/updates bash upgrade-host.sh --apply
@@ -23,14 +25,15 @@ LIST=$ROOT/var/backups/quietboard-upgrade.list   # Dateien, die --fix-stdin geä
 here=$(cd "$(dirname "$0")" && pwd)
 FILES=(hc updates-report)
 
-mode=check fix_stdin=0 report=1
+mode=check fix_stdin=0 report=1 register=0
 for a in "$@"; do
   case $a in
     --apply) mode=apply ;;
     --rollback) mode=rollback ;;
     --fix-stdin) fix_stdin=1 ;;
     --no-report) report=0 ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    --register) register=1 ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "Unbekannte Option: $a" >&2; exit 2 ;;
   esac
 done
@@ -100,6 +103,8 @@ fi
 for x in ${add[@]+"${add[@]}"}; do say "  wird ergänzt: $x"; done
 for x in ${missing[@]+"${missing[@]}"}; do say "  FEHLT: $x"; done
 has_key STATUS_HOST || say "  Hinweis: STATUS_HOST fehlt – der Host meldet sich als $(hostname -s)"
+if grep -qE "^STATUS_INGEST_TOKEN=['\"]?qbh_" "$CONF"; then say "  Melde-Token: eigenes für diesen Host"
+else say "  Melde-Token: gemeinsames (eigenes holen mit --register, ab Server v0.9)"; fi
 
 say "== Stellen, die Text in \"hc ping\" pipen (brauchen künftig ein \"-\" am Ende)"
 pipes=()
@@ -133,6 +138,25 @@ chmod 600 "$CONF"
 mkdir -p "$BIN"
 for f in "${FILES[@]}"; do install -m 0755 "$here/$f" "$BIN/$f"; say "  $BIN/$f"; done
 
+if [ "$register" = 1 ]; then
+  # shellcheck disable=SC1090
+  url=$( . "$CONF"; printf '%s' "${QB_REGISTER_URL:-${STATUS_INGEST_URL%/api/ingest/updates}/api/install/register}")
+  # shellcheck disable=SC1090
+  name=$( . "$CONF"; printf '%s' "${STATUS_HOST:-$(hostname -s)}")
+  # shellcheck disable=SC1090
+  auth=${QB_INSTALL_TOKEN:-$( . "$CONF"; printf '%s' "${STATUS_INGEST_TOKEN:-}")}
+  hdr=$(mktemp); chmod 600 "$hdr"; printf 'Authorization: Bearer %s\n' "$auth" > "$hdr"
+  tok=$(curl -fsS -m 20 -H @"$hdr" -H 'Content-Type: application/json' --data-binary "{\"host\":\"$name\"}" "$url" 2>/dev/null \
+    | sed -n 's/.*"token": *"\(qbh_[A-Za-z0-9_-]*\)".*/\1/p') || true
+  rm -f "$hdr"
+  if [ -n "$tok" ]; then
+    t=$(mktemp); grep -v '^STATUS_INGEST_TOKEN=' "$CONF" > "$t" || true
+    printf "STATUS_INGEST_TOKEN='%s'\n" "$tok" >> "$t"; cat "$t" > "$CONF"; rm -f "$t"
+    say "  eigenes Melde-Token für $name eingetragen"
+  else
+    say "  Anmeldung fehlgeschlagen ($url) – Melde-Token unverändert. Server ab v0.9? Token gültig?"
+  fi
+fi
 if [ "$fix_stdin" = 1 ] && [ ${#pipes[@]} -gt 0 ]; then
   mkdir -p "$(dirname "$LIST")"
   for f in "${pipes[@]}"; do

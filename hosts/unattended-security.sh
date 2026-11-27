@@ -2,7 +2,8 @@
 # Automatische Sicherheitsupdates (nur Debian-Security), kein Auto-Reboot, Docker ausgenommen.
 set -e
 export DEBIAN_FRONTEND=noninteractive
-apt-get install -y -q unattended-upgrades >/dev/null
+# Läuft gerade apt/unattended-upgrades (z. B. direkt nach der ersten Installation), bis 5 min auf die Sperre warten
+apt-get install -y -q -o DPkg::Lock::Timeout=300 unattended-upgrades >/dev/null
 cat > /etc/apt/apt.conf.d/52unattended-quietboard <<'CONF'
 // QuietBoard: automatisch NUR Debian-Security. Alles andere beim Wartungstermin.
 #clear Unattended-Upgrade::Origins-Pattern;

@@ -39,6 +39,23 @@ teilen, und den Befehl nur im LAN, per VPN oder über HTTPS ausführen ([Netzwer
     Gruppe hat praktisch root-Rechte. Wer das nicht möchte: `QB_AGENT_MODE=docker` (Socket nur lesend eingebunden)
     oder den Benutzer danach mit `gpasswd -d beszel docker` wieder herausnehmen.
 
+### Melde-Token je Host
+
+Jeder Host bekommt bei der Installation ein **eigenes Melde-Token** (`STATUS_INGEST_TOKEN` in `/etc/hc.conf`, beginnt
+mit `qbh_`). Es gilt nur für Berichte unter seinem eigenen Namen und für Meldungen. Den Installer mit den
+Zugangsdaten für alle Hosts lädt es nicht. Ein übernommener Host kann also nicht die Updates anderer Hosts fälschen.
+
+- **Bestehende Hosts** mit dem gemeinsamen `INGEST_TOKEN` funktionieren weiter. Eigenes Token holen: den Befehl aus
+  „Host hinzufügen“ erneut ausführen, oder für von Hand eingerichtete Hosts
+  `sudo bash …/upgrade-host.sh --apply --register` ([Aktualisieren](../install/update.md)).
+- **System → Melde-Tokens der Hosts** zeigt alle Tokens mit „zuletzt benutzt“. Dort lassen sie sich widerrufen.
+- **Gemeinsames Token abschalten:** gleiche Stelle. Vorher prüfen, wer es noch nutzt – die Liste darunter zeigt die
+  letzten Absender, z. B. PVE-Webhooks oder Bridges. Danach enthält der Befehl aus „Host hinzufügen“ ein
+  Installer-Token, das nach einer Stunde abläuft.
+- **Webhooks** (PVE/PBS, Bridges) können statt des gemeinsamen Tokens das Token eines Hosts nutzen.
+
+Der Ping-Key von Healthchecks gilt weiter für das ganze Projekt: Healthchecks kennt nur einen je Projekt.
+
 ### Was QuietBoard je Host automatisch einrichtet
 
 - **Alarme in Beszel:** Status (nach 5 Minuten offline), Disk > 90 % (10 min), RAM > 95 % (15 min). Beszel meldet an QuietBoard, QuietBoard benachrichtigt per Push/Mail/Signal. Anpassen in der Beszel-Oberfläche.
