@@ -104,6 +104,17 @@ def test_shared_token_use_is_listed(client):
     assert j["legacy_allowed"] is True and any("/api/ingest/updates" in k for k in j["legacy_use"])
 
 
+def test_shared_token_use_on_signal_path_is_listed(client):
+    main.legacy_use.clear()
+    assert client.post("/api/ingest/signal/test-token/v2/send", json={"message": "hi"}).status_code == 200
+    keys = list(client.get("/api/host-tokens").json()["legacy_use"])
+    assert any("/api/ingest/signal/***" in k for k in keys) and not any("test-token" in k for k in keys)
+    host_tok = register(client, "web01")
+    main.legacy_use.clear()
+    assert client.post(f"/api/ingest/signal/{host_tok}/v2/send", json={"message": "hi"}).status_code == 200
+    assert not client.get("/api/host-tokens").json()["legacy_use"]  # Host-Token: kein Eintrag
+
+
 def test_admin_can_revoke_host_token(client):
     tok = register(client, "web01")
     assert client.delete("/api/host-tokens/web01").status_code == 200
