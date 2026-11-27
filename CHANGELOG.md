@@ -6,6 +6,8 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+## 0.9.0 – 2026-11-27
+
 ### Hinweis zur Anbindung der Hosts
 Abwärtskompatibel: Hosts mit älteren Skripten und das gemeinsame `INGEST_TOKEN` funktionieren unverändert weiter.
 
