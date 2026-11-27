@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import re
@@ -20,7 +21,7 @@ import time
 # Größe des Anfragekörpers je Route. JSON wird beim Einlesen etwa 20-mal so groß (Python-Objekte) – ohne enge
 # Grenze für die Anmelderouten könnte jeder ohne Konto den Container (128 MB) mit wenigen Anfragen sprengen.
 AUTH_BODY_LIMIT = 16_000  # /api/auth/* (Login, Einrichtung) – ohne Anmeldung erreichbar
-IMPORT_BODY_LIMIT = 600_000  # YAML-Import (bis 500 000 Zeichen)
+IMPORT_BODY_LIMIT = 250_000  # YAML-Import (bis 200 000 Zeichen)
 INGEST_BODY_LIMIT = 1_000_000  # Meldungen von Hosts (PVE-Logs werden ohnehin gekürzt)
 BODY_LIMIT = 64_000  # alles andere
 INGEST_PREFIX = "/api/ingest/"
@@ -46,9 +47,14 @@ SECURITY_HEADERS = [
 
 # ---------------------------------------------------------------- Vertraute Proxys
 class TrustedProxies:
-    """CIDRs werden direkt geprüft, Namen per DNS aufgelöst (30 s zwischengespeichert)."""
+    """CIDRs werden direkt geprüft, Namen per DNS aufgelöst (30 s zwischengespeichert).
+
+    Die Auflösung läuft im Hintergrund (Thread-Pool der Event-Loop): Eine Anfrage liest nur den Zwischenspeicher und
+    wartet nie auf DNS – sonst stünde bei gestörtem Upstream-DNS die ganze App. Einzige Ausnahme ist die allererste
+    Anfrage nach dem Start (`ready`)."""
 
     TTL = 30
+    TIMEOUT = 5
 
     def __init__(self, spec: str):
         self.nets: list = []
@@ -60,20 +66,49 @@ class TrustedProxies:
                 self.nets.append(ipaddress.ip_network(item, strict=False))
             except ValueError:
                 self.names.append(item)
-        self._cache: tuple[float, set[str]] = (0.0, set())
+        self._cache: tuple[float | None, set[str]] = (None, set())
+        self._task: asyncio.Task | None = None
 
-    def _resolved(self) -> set[str]:
-        at, ips = self._cache
-        if time.monotonic() - at < self.TTL:
-            return ips
-        ips = set()
+    def _lookup_sync(self) -> set[str]:
+        ips: set[str] = set()
         for name in self.names:
             try:
                 ips |= {ai[4][0] for ai in socket.getaddrinfo(name, None)}
             except OSError:
                 pass
-        self._cache = (time.monotonic(), ips)
         return ips
+
+    async def update(self) -> None:
+        loop = asyncio.get_running_loop()
+        ips: set[str] = set()
+        for name in self.names:
+            try:
+                infos = await asyncio.wait_for(loop.getaddrinfo(name, None), self.TIMEOUT)
+                ips |= {ai[4][0] for ai in infos}
+            except (OSError, TimeoutError):
+                pass
+        self._cache = (time.monotonic(), ips)
+
+    async def ready(self) -> None:
+        """Nur bis zur ersten Auflösung warten (direkt nach dem Start), danach sofort zurück."""
+        if self.names and self._cache[0] is None:
+            await self.update()
+
+    def ips(self) -> set[str]:
+        at, ips = self._cache
+        if at is None or time.monotonic() - at >= self.TTL:
+            self._kick()
+        return self._cache[1]
+
+    def _kick(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # ohne Event-Loop (Werkzeuge, Tests): direkt auflösen
+            self._cache = (time.monotonic(), self._lookup_sync())
+            return
+        if self._task and not self._task.done() and self._task.get_loop() is loop:
+            return
+        self._task = loop.create_task(self.update())
 
     def __contains__(self, ip: str) -> bool:
         if not ip:
@@ -84,7 +119,7 @@ class TrustedProxies:
             return False
         if any(addr in n for n in self.nets):
             return True
-        return bool(self.names) and ip in self._resolved()
+        return bool(self.names) and ip in self.ips()
 
 
 def _header(headers: list, name: bytes) -> str:
@@ -112,6 +147,9 @@ class ShieldMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
             return await self.app(scope, receive, send)
+        await self.trusted.ready()
+        if self.cloudflare:
+            await self.cloudflare.ready()
         headers = scope.get("headers") or []
         peer = (scope.get("client") or ("", 0))[0]
         scope["qb_peer"] = peer

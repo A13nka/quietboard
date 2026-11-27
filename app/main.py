@@ -18,7 +18,6 @@ import logging
 import os
 import re
 import smtplib
-import socket
 import ssl
 import time
 from email.message import EmailMessage
@@ -119,13 +118,13 @@ def _load(name: str, default):
         return default
 
 
-def _save(name: str, obj) -> None:
+def _save(name: str, obj, indent: int | None = 1) -> None:
     """Atomar und dauerhaft: erst vollständig in eine Temp-Datei (fsync), dann umbenennen (auch nach Stromausfall
     liegt entweder der alte oder der neue Stand vor, nie ein halber)."""
     p = DATA / name
     tmp = p.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(obj, ensure_ascii=False, indent=1))
+        fh.write(json.dumps(obj, ensure_ascii=False, indent=indent))
         fh.flush()
         os.fsync(fh.fileno())
     tmp.replace(p)
@@ -169,7 +168,7 @@ def add_event(source: str, title: str, message: str, prio: str = "info") -> None
         0, {"ts": now().isoformat(timespec="seconds"), "source": source, "title": title[:200], "message": message[:4000], "prio": prio}
     )
     del events[300:]
-    _save("events.json", events)
+    _save("events.json", events, indent=None)  # bis ~1 MB: ohne Einrückung gut ein Drittel kleiner, schneller geschrieben
 
 
 # ---------------------------------------------------------------- Signal
@@ -179,18 +178,23 @@ async def push_all(title: str, body: str = "", url: str = "/", tag: str | None =
         return 0
     msg = {"title": title, "body": body, "url": url, "tag": tag or title[:60]}
     ok, dead = 0, []
-    async with httpx.AsyncClient(timeout=15) as cli:
-        for ep, sub in list(push_subs.items()):
-            try:
-                r = await cli.post(**push.request_args(VAPID, sub, msg))
-                if r.status_code in (404, 410):
-                    dead.append(ep)
-                elif r.status_code >= 400:
-                    log.warning("Push an %s: HTTP %s %s", urlparse(ep).hostname, r.status_code, r.text[:200])
-                else:
-                    ok += 1
-            except Exception as exc:
-                log.warning("Push fehlgeschlagen: %s", exc)
+
+    async def one(cli: httpx.AsyncClient, ep: str, sub: dict) -> None:
+        nonlocal ok
+        try:
+            r = await cli.post(**push.request_args(VAPID, sub, msg))
+            if r.status_code in (404, 410):
+                dead.append(ep)
+            elif r.status_code >= 400:
+                log.warning("Push an %s: HTTP %s %s", urlparse(ep).hostname, r.status_code, r.text[:200])
+            else:
+                ok += 1
+        except Exception as exc:
+            log.warning("Push fehlgeschlagen: %s", exc)
+
+    # Alle Geräte gleichzeitig: ein langsamer Push-Dienst hält die anderen nicht auf
+    async with httpx.AsyncClient(timeout=httpx.Timeout(15, connect=5)) as cli:
+        await asyncio.gather(*(one(cli, ep, sub) for ep, sub in list(push_subs.items())))
     for ep in dead:
         push_subs.pop(ep, None)
     if dead:
@@ -350,7 +354,8 @@ async def check_transitions() -> None:
     else:
         delivered = set()
         if downs:
-            infos = {c["uuid"]: await _last_ping_info(c["uuid"]) for c in downs}
+            got = await asyncio.gather(*(_last_ping_info(c["uuid"]) for c in downs))
+            infos = {c["uuid"]: i for c, i in zip(downs, got, strict=True)}
             text, mail, url = alerts.down_message(downs, infos, now_, PUBLIC_URL)
             if await send_signal(text, url=url, mail_text=mail) or not channels_configured():
                 delivered |= {c["uuid"] for c in downs}
@@ -411,16 +416,28 @@ async def fetch_checks(cli: httpx.AsyncClient) -> list[dict]:
     return out
 
 
+_beszel_auth = {"user": "", "token": ""}  # Anmeldung bei Beszel zwischengespeichert (sonst bcrypt auf dem Hub je Abruf)
+
+
 async def fetch_hosts(cli: httpx.AsyncClient) -> list[dict]:
-    auth = await cli.post(
-        f"{BESZEL_URL}/api/collections/users/auth-with-password", json={"identity": CREDS.beszel_user, "password": CREDS.beszel_pass}
-    )
-    auth.raise_for_status()
-    token = auth.json()["token"]
-    r = await cli.get(
-        f"{BESZEL_URL}/api/collections/systems/records", params={"perPage": 200, "sort": "name"}, headers={"Authorization": token}
-    )
-    r.raise_for_status()
+    for attempt in (1, 2):
+        if not _beszel_auth["token"] or _beszel_auth["user"] != CREDS.beszel_user:
+            auth = await cli.post(
+                f"{BESZEL_URL}/api/collections/users/auth-with-password",
+                json={"identity": CREDS.beszel_user, "password": CREDS.beszel_pass},
+            )
+            auth.raise_for_status()
+            _beszel_auth.update(user=CREDS.beszel_user, token=auth.json()["token"])
+        r = await cli.get(
+            f"{BESZEL_URL}/api/collections/systems/records",
+            params={"perPage": 200, "sort": "name"},
+            headers={"Authorization": _beszel_auth["token"]},
+        )
+        if r.status_code in (401, 403) and attempt == 1:  # Token abgelaufen oder widerrufen: einmal neu anmelden
+            _beszel_auth["token"] = ""
+            continue
+        r.raise_for_status()
+        break
     out = []
     for s in r.json().get("items", []):
         info = s.get("info") or {}
@@ -508,14 +525,60 @@ _refresh_lock = asyncio.Lock()
 _bg_tasks: set[asyncio.Task] = set()  # Referenzen halten, sonst kann der GC laufende Tasks einsammeln
 
 
-async def refresh() -> None:
+_refresh_started = 0  # Zahl der begonnenen Abrufe
+_refresh_finished = 0  # Nummer des zuletzt beendeten Abrufs
+_deliver_task: asyncio.Task | None = None
+
+
+async def refresh(fresh: bool = False) -> None:
     """Nie zwei Abrufe gleichzeitig (sonst z. B. doppelte Beszel-Alarme oder konkurrierende Einrichtung).
-    Läuft schon einer, wartet der Aufrufer auf dessen Ergebnis statt einen zweiten zu starten."""
-    if _refresh_lock.locked():
+    Läuft schon einer, wartet der Aufrufer auf dessen Ergebnis statt einen zweiten zu starten.
+
+    fresh=True (nach Schreibaktionen): Der Stand muss von einem Abruf stammen, der *nach* dem Aufruf begonnen hat –
+    ein schon laufender Abruf hat die Änderung womöglich noch nicht gesehen."""
+    global _refresh_started, _refresh_finished
+    if _refresh_lock.locked() and not fresh:
         async with _refresh_lock:
             return
+    wanted = _refresh_started + 1
     async with _refresh_lock:
-        await _refresh()
+        if _refresh_finished >= wanted:  # während des Wartens hat ein späterer Abruf schon alles geholt
+            return
+        _refresh_started += 1
+        gen = _refresh_started
+        try:
+            await _refresh()
+        finally:
+            _refresh_finished = gen
+
+
+async def _deliver() -> None:
+    """Zustandswechsel auswerten und melden. Läuft außerhalb des Abruf-Locks: Ein hängender Mailserver oder ein
+    langsamer Push-Dienst hält weder den nächsten Abruf noch Schreibaktionen auf."""
+    try:
+        await check_transitions()
+        await check_sec_overdue()
+    except Exception:
+        log.exception("Push-Auswertung fehlgeschlagen")
+    try:
+        await check_source_outage()
+    except Exception:
+        log.exception("Quellen-Auswertung fehlgeschlagen")
+
+
+def _schedule_delivery() -> None:
+    """Nie zwei Auswertungen gleichzeitig (sonst doppelte Meldungen). Läuft noch eine, wertet der nächste Abruf den
+    dann aktuellen Stand aus – gemerkt wird ohnehin erst nach Zustellung."""
+    global _deliver_task
+    if _deliver_task and not _deliver_task.done():
+        return
+    _deliver_task = asyncio.create_task(_deliver())
+
+
+async def deliveries_done() -> None:
+    """Auf eine laufende Auswertung warten (Tests, Herunterfahren)."""
+    if _deliver_task and not _deliver_task.done():
+        await asyncio.shield(_deliver_task)
 
 
 def refresh_soon(delay: float) -> None:
@@ -563,6 +626,8 @@ async def _refresh() -> None:
             except Exception as exc:
                 state["errors"][name] = f"nicht erreichbar: {type(exc).__name__} {exc}".strip()
                 log.warning("%s: %s %s", name, type(exc).__name__, exc)
+                if name == "healthchecks" and isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (401, 403):
+                    CREDS.hc_rejected = True
                 if (
                     name == "beszel"
                     and isinstance(exc, httpx.HTTPStatusError)
@@ -579,11 +644,7 @@ async def _refresh() -> None:
             except Exception as exc:
                 log.warning("Job-Alarme/Lebenszeichen einrichten: %s", exc)
         await ensure_alerts()
-        try:
-            await check_transitions()
-            await check_sec_overdue()
-        except Exception:
-            log.exception("Push-Auswertung fehlgeschlagen")
+        _schedule_delivery()
         for name, url, tid, sec, check in PBS_TARGETS:
             try:
                 state["pbs"][name] = await fetch_pbs(name, url, tid, sec, check)
@@ -601,10 +662,6 @@ async def _refresh() -> None:
             digest_state["watch_checked"] = now().date().isoformat()
             digest_state["watch_cfg"] = watch_cfg
             _save("digest.json", digest_state)
-        try:
-            await check_source_outage()
-        except Exception:
-            log.exception("Quellen-Auswertung fehlgeschlagen")
     state["generated"] = now().isoformat(timespec="seconds")
     await ping_heartbeat()
 
@@ -807,10 +864,11 @@ def attention() -> list[dict]:
             )
     for name, msg in report_problems().items():
         items.append({"level": "warn", "kind": "update", "title": tr("{host} · Update-Bericht", host=name), "detail": msg})
-    cutoff = (now() - dt.timedelta(hours=24)).isoformat()
+    cutoff = now() - dt.timedelta(hours=24)
     for ev in events:
-        if ev["ts"] < cutoff:
-            break
+        # Als Zeitpunkt vergleichen, nicht als Text: um die Zeitumstellung (+01:00/+02:00) läge der Text bis 1 h daneben
+        if _ts(ev["ts"]) < cutoff:
+            continue  # nicht break: die Liste ist nicht garantiert sortiert (Demo, Import)
         # Alle Quellen (pve, pbs, notify, dockhand, nas, synology, …); Beszel-Meldungen stecken schon im Host-Status
         if ev["prio"] in ("kritisch", "normal") and ev["source"] != "beszel":
             items.append({"level": "warn", "kind": "event", "title": ev["title"], "detail": ev["message"][:300]})
@@ -820,6 +878,15 @@ def attention() -> list[dict]:
                 0, {"level": "bad", "kind": "source", "title": tr("{q} nicht erreichbar", q=name), "detail": state["errors"][name][:200]}
             )
     return items
+
+
+def _ts(value: str) -> dt.datetime:
+    """Zeitstempel aus Ereignissen/Beszel lesen; ohne Zeitzone gilt UTC (PocketBase), Unlesbares als sehr alt."""
+    try:
+        t = dt.datetime.fromisoformat(str(value).replace(" ", "T").replace("Z", "+00:00"))
+    except ValueError:
+        return dt.datetime.min.replace(tzinfo=dt.UTC)
+    return t if t.tzinfo else t.replace(tzinfo=dt.UTC)
 
 
 def summary() -> dict:
@@ -854,7 +921,7 @@ def digest_text() -> str:
     lines.append(f"Jobs {s['checks_ok']}/{s['checks_total']} · Hosts {s['hosts_up']}/{s['hosts_total']}")
     for h in state["hosts"]:  # Hosts mit Zeitfenster (always_on: false): wann zuletzt gesehen
         if not host_extra(h["name"])["always_on"] and h.get("updated"):
-            lines.append(tr("{name} zuletzt gesehen: {t}", name=h["name"], t=h["updated"][:16].replace("T", " ")))
+            lines.append(tr("{name} zuletzt gesehen: {t}", name=h["name"], t=alerts.when(h["updated"], now())))
     lines.append(
         tr("Updates: {h} Hosts · {p} Pakete · Security {s}", h=s["upd_hosts"], p=s["updates"], s=s["security"])
         + (tr(" (überfällig {n})", n=s["sec_overdue"]) if s["sec_overdue"] else "")
@@ -892,15 +959,28 @@ def digest_due(t: str, current: dt.datetime, sent_on: str | None) -> bool:
     return sent_on != current.date().isoformat() and start <= current < start + dt.timedelta(minutes=DIGEST_WINDOW_MIN)
 
 
+DIGEST_RETRY_MIN = (5, 15, 30)  # Wartezeit nach dem 1., 2., 3.+ gescheiterten Versuch
+
+
 async def digest_loop() -> None:
+    """Morgenmeldung im Fenster nach der eingestellten Zeit. Stellt kein Kanal zu, wird nicht alle 30 s neu versucht
+    (Log voller Warnungen, je Versuch bis zu 20 s SMTP), sondern nach 5, 15, 30 min; ohne Kanal gar nicht."""
+    failed, retry_at = 0, 0.0
     while True:
         try:
             t = STORE.get_setting("digest_time") or config._hhmm((cfg.get("settings") or {}).get("digest_time", "07:00"))
             today = now().date().isoformat()
-            if digest_due(t, now(), digest_state.get("sent")) and state["generated"]:
+            due = digest_due(t, now(), digest_state.get("sent")) and state["generated"]
+            if not due:
+                failed, retry_at = 0, 0.0
+            elif channels_configured() and time.monotonic() >= retry_at:
                 if await send_signal(digest_text()):
                     digest_state["sent"] = today
                     _save("digest.json", digest_state)
+                    failed = 0
+                else:
+                    retry_at = time.monotonic() + 60 * DIGEST_RETRY_MIN[min(failed, len(DIGEST_RETRY_MIN) - 1)]
+                    failed += 1
         except Exception:
             log.exception("Morgenmeldung fehlgeschlagen")
         await asyncio.sleep(30)
@@ -1132,19 +1212,20 @@ def _token_ok(*given: str, request: Request | None = None) -> bool:
     return bool(who) and who["kind"] != "installer"
 
 
-def _resolve(host: str) -> set[str]:
-    try:
-        return {ai[4][0] for ai in socket.getaddrinfo(host, None)}
-    except OSError:
-        return set()
+_BESZEL_PEERS = security.TrustedProxies(BESZEL_HOST)  # Name → IPs, im Hintergrund aufgelöst (keine DNS-Wartezeit)
 
 
-def require_beszel(request: Request) -> None:
+def _beszel_ips() -> set[str]:
+    return _BESZEL_PEERS.ips()
+
+
+async def require_beszel(request: Request) -> None:
     """Beszel-Webhook: nur vom Beszel-Container (per Namensauflösung), aus INTERNAL_NETS oder mit Ingest-Token.
     Ein pauschales "privates Netz" reicht nicht – sonst dürfte jedes Gerät im LAN Meldungen einspielen.
     Geprüft wird die echte Gegenstelle der Verbindung, nie eine weitergeleitete Adresse (X-Forwarded-For)."""
     client = request.scope.get("qb_peer") or (request.client.host if request.client else "")
-    if client and client in _resolve(BESZEL_HOST):
+    await _BESZEL_PEERS.ready()
+    if client and client in _beszel_ips():
         return
     try:
         if any(ipaddress.ip_address(client) in n for n in INTERNAL_NETS):
@@ -1232,6 +1313,21 @@ def _sh_quote(v: str) -> str:
     return "'" + v.replace("'", "'\\''") + "'"
 
 
+_LOCAL_NAMES = ("localhost", "127.0.0.1", "::1")
+
+
+def ping_base(base: str) -> str:
+    """Ping-Adresse von Healthchecks, wie die Hosts sie erreichen. HC_PING_ENDPOINT gewinnt – außer es zeigt auf
+    localhost: Das gilt auf jedem Host für ihn selbst, alle Pings gingen ins Leere (Review 3b-N6). Dann wie die
+    Adresse, unter der die App gerade aufgerufen wurde, Port 8000."""
+    p = E("HC_PING_ENDPOINT", "").rstrip("/")
+    if p and urlparse(p).hostname not in _LOCAL_NAMES:
+        return p
+    if p:
+        log.warning("HC_PING_ENDPOINT zeigt auf localhost – Hosts bekommen stattdessen die Adresse der App (Port 8000)")
+    return f"{urlparse(base).scheme}://{urlparse(base).hostname}:8000/ping"
+
+
 @app.get("/api/install/host.sh")
 async def install_host_script(request: Request):
     """Fertig ausgefüllter Host-Installer – ein Befehl pro Host:
@@ -1247,7 +1343,7 @@ async def install_host_script(request: Request):
     base = str(request.base_url).rstrip("/")
     presented = request.headers.get("authorization", "").removeprefix("Bearer ").strip() or request.headers.get("x-token", "")
     values = {
-        "QB_PING_BASE": E("HC_PING_ENDPOINT", "").rstrip("/") or f"{urlparse(base).scheme}://{urlparse(base).hostname}:8000/ping",
+        "QB_PING_BASE": ping_base(base),
         "QB_PING_KEY": CREDS.hc_ping_key,
         "QB_INGEST_URL": f"{base}/api/ingest/updates",
         # Der Host holt sich bei der Installation sein eigenes Token (QB_REGISTER_URL). Das gemeinsame Token steht
@@ -1329,8 +1425,8 @@ async def install_token(request: Request):
 
 @app.get("/api/agent")
 async def api_agent(request: Request):
-    require_admin(request)
     """Zugangsdaten für neue Beszel-Agents (Grundlage für den Kopier-Block "Host hinzufügen")."""
+    require_admin(request)
     if not (CREDS.agent_token and CREDS.hub_key):
         raise HTTPException(503, CREDS.errors.get("beszel", "Beszel noch nicht eingerichtet"))
     return {"hub_url": BESZEL_PUBLIC or BESZEL_URL, "key": CREDS.hub_key, "token": CREDS.agent_token}
@@ -1374,6 +1470,11 @@ async def _json_or_text(request: Request) -> dict:
     return b if isinstance(b, dict) else {"message": json.dumps(b, ensure_ascii=False)[:4000]}
 
 
+KIND_RE = re.compile(r"[a-z0-9_-]{1,20}")
+MAX_KINDS_PER_HOST = 10  # apt, mailcow, dsm, … – mehr hat kein Host
+MAX_REPORT_HOSTS = 500
+
+
 @app.post("/api/ingest/updates")
 async def ingest_updates(request: Request):
     """Body: {host, kind: apt|dsm|docker|scanner|mailcow, items: [{pkg, from, to, security}], reboot?: bool}"""
@@ -1388,8 +1489,16 @@ async def ingest_updates(request: Request):
         raise HTTPException(400, "items muss eine Liste sein")
     if who["kind"] == "host" and b["host"] != who["host"]:
         raise UserError(403, "Dieses Token gilt nur für den Host {host}", host=who["host"])
-    host, kind = b["host"], str(b.get("kind", "apt"))[:20]
+    host, kind = b["host"], str(b.get("kind", "apt"))
+    if not KIND_RE.fullmatch(kind):
+        raise HTTPException(400, "kind ungültig (a-z, 0-9, - und _, höchstens 20 Zeichen)")
     key = f"{host}|{kind}"
+    # Obergrenzen: ein fehlerhaftes Skript mit wechselndem kind oder Hostnamen darf updates.json nicht unbegrenzt
+    # wachsen lassen (liegt komplett im RAM und wird bei jedem Bericht neu geschrieben)
+    if key not in updates and host not in flags and len({u["host"] for u in updates.values()} | set(flags)) >= MAX_REPORT_HOSTS:
+        raise UserError(400, "Zu viele Hosts mit Update-Berichten (höchstens {n}) – alte Hosts unter Updates entfernen", n=MAX_REPORT_HOSTS)
+    if key not in updates and sum(1 for u in updates.values() if u["host"] == host) >= MAX_KINDS_PER_HOST:
+        raise UserError(400, "Zu viele Berichtsarten für {host} (höchstens {n})", host=host, n=MAX_KINDS_PER_HOST)
     ts = now().isoformat(timespec="seconds")
     f = flags.setdefault(host, {})
     if b.get("error"):
@@ -1487,7 +1596,7 @@ async def ingest_pve(request: Request, source: str = "pve", host: str = "pve"):
 @app.post("/api/ingest/beszel")
 async def ingest_beszel(request: Request):
     """Beszel-Benachrichtigung (Shoutrrr generic, template=json). Nur vom Beszel-Container oder mit Token."""
-    require_beszel(request)
+    await require_beszel(request)
     b = await _json_or_text(request)
     title, message = str(b.get("title", "Beszel")), str(b.get("message", ""))
     add_event("beszel", title, message, "normal")
@@ -1590,8 +1699,8 @@ async def push_test(request: Request):
 
 @app.post("/api/digest/test")
 async def digest_test(request: Request):
-    require_admin(request)
     """Morgenmeldung sofort senden (geschützt durch Access)."""
+    require_admin(request)
     return {"sent": await send_signal(digest_text()), "text": digest_text()}
 
 
@@ -1983,7 +2092,7 @@ async def host_delete(name: str, request: Request):
     hs = host_settings()
     if hs.pop(name, None) is not None:
         STORE.set_setting("hosts", hs)
-    await refresh()
+    await refresh(fresh=True)
     return {"ok": True, "beszel": removed}
 
 
@@ -2084,7 +2193,7 @@ async def jobs_help(request: Request):
     require_admin(request)
     base = str(request.base_url).rstrip("/")
     hosts = sorted({h["name"] for h in state["hosts"]} | {c["host"] for c in state["checks"] if c.get("host")})
-    ping = E("HC_PING_ENDPOINT", "").rstrip("/") or f"{urlparse(base).scheme}://{urlparse(base).hostname}:8000/ping"
+    ping = ping_base(base)
     return {
         "hosts": hosts,
         "ping_url": f"{ping}/{CREDS.hc_ping_key or '<ping-key>'}",
@@ -2114,7 +2223,7 @@ async def check_create(request: Request):
         created = (await _hc("POST", "/api/v3/checks/", json=body)).json()
     except httpx.HTTPError as exc:
         raise _hc_error(exc) from None
-    await refresh()
+    await refresh(fresh=True)
     uuid = created.get("uuid") or created.get("unique_key")
     return {"ok": True, "check": next((c for c in state["checks"] if c["uuid"] == uuid), None), "form": jobs_mod.to_form(created)}
 
@@ -2144,7 +2253,7 @@ async def check_update(uuid: str, request: Request):
         raise HTTPException(400, str(exc)) from None
     except httpx.HTTPError as exc:
         raise _hc_error(exc) from None
-    await refresh()
+    await refresh(fresh=True)
     return {"ok": True, "check": next((c for c in state["checks"] if c["uuid"] == uuid), None)}
 
 
@@ -2156,7 +2265,7 @@ async def check_delete(uuid: str, request: Request):
         await _hc("DELETE", f"/api/v3/checks/{uuid}")
     except httpx.HTTPError as exc:
         raise _hc_error(exc) from None
-    await refresh()
+    await refresh(fresh=True)
     return {"ok": True}
 
 
@@ -2191,6 +2300,15 @@ async def config_export(request: Request):
     return Response(text, media_type="application/yaml", headers={"Content-Disposition": 'attachment; filename="quietboard-config.yaml"'})
 
 
+class _NoAliasLoader(yaml.SafeLoader):
+    """Wie safe_load, aber ohne Aliase (*name): Verschachtelte Aliase wachsen beim Auswerten exponentiell."""
+
+    def compose_node(self, parent, index):
+        if self.check_event(yaml.AliasEvent):
+            raise yaml.YAMLError("Aliase (*name) sind im Import nicht erlaubt")
+        return super().compose_node(parent, index)
+
+
 @app.post("/api/config/import")
 async def config_import(request: Request):
     """Body: {"yaml": "...", "dry": true|false}. Legt Jobs an/aktualisiert sie und übernimmt Host-Einstellungen – löscht nie.
@@ -2198,10 +2316,11 @@ async def config_import(request: Request):
     require_admin(request)
     b = await _body(request)
     text = b.get("yaml", "")
-    if not isinstance(text, str) or len(text) > 500_000:
-        raise HTTPException(400, "YAML fehlt oder ist zu groß (höchstens 500 000 Zeichen)")
+    if not isinstance(text, str) or len(text) > 200_000:
+        raise HTTPException(400, "YAML fehlt oder ist zu groß (höchstens 200 000 Zeichen)")
     try:
-        doc = yaml.safe_load(text) or {}
+        # Im Thread: reines Python-YAML braucht bei großen Dateien spürbar CPU, die App soll derweil antworten
+        doc = await asyncio.to_thread(yaml.load, text, _NoAliasLoader) or {}
     except yaml.YAMLError as exc:
         raise UserError(400, "YAML fehlerhaft: {e}", e=str(exc).splitlines()[0]) from None
     if (
@@ -2275,7 +2394,7 @@ async def config_import(request: Request):
     actions = [done.get(a["name"], a) for a in actions]
     if hosts:
         STORE.set_setting("hosts", hs)
-    await refresh()
+    await refresh(fresh=True)
     return {"dry": False, "checks": actions, "hosts": hosts, "applied": True}
 
 
@@ -2302,7 +2421,7 @@ async def check_action(uuid: str, action: str, request: Request):
             raise HTTPException(404)
     except httpx.HTTPError as exc:
         raise _hc_error(exc) from None
-    await refresh()
+    await refresh(fresh=True)
     return {"ok": True, "check": next((c for c in state["checks"] if c["uuid"] == uuid), None)}
 
 

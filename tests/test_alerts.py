@@ -206,7 +206,7 @@ def test_beszel_dedup_key_ignores_state_words(monkeypatch):
         return True
 
     monkeypatch.setattr(main, "send_signal", fake)
-    monkeypatch.setattr(main, "_resolve", lambda host: {"testclient"})
+    monkeypatch.setattr(main, "_beszel_ips", lambda: {"testclient"})
     c = TestClient(main.app)
     c.post("/api/ingest/beszel", json={"title": "web01 is down", "message": "m"})
     c.post("/api/ingest/beszel", json={"title": "web01 is up", "message": "m"})
@@ -258,7 +258,7 @@ def hc(monkeypatch):
     }
     fake = FakeHC(check)
     monkeypatch.setattr(main, "_hc", fake)
-    monkeypatch.setattr(main, "refresh", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(main, "refresh", lambda **k: asyncio.sleep(0))
     monkeypatch.setattr(main, "ALLOW_NO_AUTH", True)
     monkeypatch.setattr(main.CREDS, "hc_api_key", "k")
     return fake
@@ -441,3 +441,11 @@ def test_sec_overdue_alert_retried_until_delivered(transitions, monkeypatch):
     n = len(sent)
     run(main.check_sec_overdue())
     assert len(sent) == n  # einmal reicht
+
+
+def test_import_rejects_yaml_aliases(hc):
+    """Review 3b-N11: verschachtelte Aliase wachsen beim Auswerten exponentiell – abgelehnt, nichts geschrieben."""
+    doc = "a: &a [x, x]\nb: &b [*a, *a]\nchecks:\n  - name: *b\n    schedule: '0 4 * * *'\n"
+    r = TestClient(main.app).post("/api/config/import", json={"yaml": doc, "dry": False})
+    assert r.status_code == 400 and "Aliase" in r.json()["detail"]
+    assert not hc.posts

@@ -60,7 +60,7 @@ services:
       BESZEL_ALERT_DOWN_MIN: ${BESZEL_ALERT_DOWN_MIN:-5}
       HC_URL: http://healthchecks:8000
       HC_PUBLIC_URL: ${HC_PUBLIC_URL:-}
-      HC_PING_ENDPOINT: ${HC_PING_ENDPOINT:-http://localhost:8000/ping/}
+      HC_PING_ENDPOINT: ${HC_PING_ENDPOINT:-}  # leer: Adresse der App mit Port 8000 (localhost gälte auf jedem Host für ihn selbst)
       BESZEL_URL: http://beszel:8090
       BESZEL_PUBLIC_URL: ${BESZEL_PUBLIC_URL:-}
       # Nur für Bestandsinstallationen; sonst richtet die App die Zugänge selbst ein.
@@ -94,6 +94,11 @@ services:
       - status-data:/data
       - bootstrap:/bootstrap:ro
     mem_limit: 192m   # scrypt (2× 16 MB) und große Meldungen brauchen Luft
+    # Härtung: Dateisystem nur lesbar (geschrieben wird nur nach /data), keine Linux-Capabilities, keine Rechte-Erhöhung
+    read_only: true
+    tmpfs: ["/tmp:size=16m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   healthchecks-init:
     image: healthchecks/healthchecks:v5.0.3

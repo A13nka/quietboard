@@ -5,11 +5,14 @@ Aus app/main.py herausgelöst (gleiches Verhalten); main.py importiert die Namen
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import hashlib
 import logging
 import os
 import re
+import ssl
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -46,25 +49,61 @@ def pbs_verify(check: str) -> tuple[bool | str, str]:
     return False, fp
 
 
+_pinned: dict[tuple[str, str], ssl.SSLContext] = {}
+_NO_CHECK_TIME = 0x200000  # X509_V_FLAG_NO_CHECK_TIME: wie bei PVE zählt nur der Fingerprint, nicht das Ablaufdatum
+
+
+async def _pinned_context(name: str, url: str, fp: str) -> ssl.SSLContext:
+    """TLS-Kontext, der im Handshake genau das Zertifikat mit diesem Fingerprint annimmt.
+
+    Das Zertifikat wird einmal ohne Anfrage (nur Handshake) geholt und mit dem Fingerprint verglichen; danach ist es
+    der einzige Vertrauensanker. So verlässt das PBS-Token die App nie über eine Verbindung, deren Gegenstelle noch
+    nicht geprüft ist (Review 3a-N4) – auch nicht bei neuen Verbindungen."""
+    ctx = _pinned.get((url, fp))
+    if ctx:
+        return ctx
+    u = urlparse(url)
+    pem = await asyncio.to_thread(ssl.get_server_certificate, (u.hostname, u.port or 443), timeout=10)
+    if hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest() != fp:
+        raise ValueError(f"PBS {name}: Zertifikat passt nicht zum Fingerprint")
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False  # PBS-Zertifikate lauten meist auf den Rechnernamen, nicht auf die Adresse
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    ctx.load_verify_locations(cadata=pem)
+    ctx.verify_flags = ssl.VERIFY_X509_PARTIAL_CHAIN | _NO_CHECK_TIME  # das Zertifikat selbst ist der Anker
+    _pinned[(url, fp)] = ctx
+    return ctx
+
+
+def _cert_error(exc: BaseException) -> bool:
+    """Steckt in der Kette (httpx → httpcore → ssl) ein abgelehntes Zertifikat?"""
+    seen = 0
+    while exc is not None and seen < 10:
+        if isinstance(exc, ssl.SSLCertVerificationError):
+            return True
+        exc, seen = exc.__cause__ or exc.__context__, seen + 1
+    return False
+
+
 async def fetch_pbs(name: str, url: str, token_id: str, secret: str, check: str = "") -> dict:
     verify, fp = pbs_verify(check)
     if verify is False and not fp and name not in _pbs_warned:
         _pbs_warned.add(name)
         log.warning("PBS %s: Zertifikat wird nicht geprüft – Fingerprint als 5. Feld in PBS_TARGETS eintragen (Doku: env)", name)
-    async with httpx.AsyncClient(timeout=10, verify=verify) as cli:
-        if fp:
-            # Erst ohne Token prüfen, mit wem wir sprechen; danach jede Antwort (neue Verbindungen möglich)
-            probe = await cli.get(f"{url}/api2/json/version")
-            if _fingerprint(probe) != fp:
-                raise ValueError(f"PBS {name}: Zertifikat passt nicht zum Fingerprint")
-        headers = {"Authorization": f"PBSAPIToken={token_id}:{secret}"}
-        r1 = (await cli.get(f"{url}/api2/json/status/datastore-usage", headers=headers)).raise_for_status()
-        r2 = (
-            await cli.get(f"{url}/api2/json/nodes/localhost/tasks", params={"running": 1, "limit": 20}, headers=headers)
-        ).raise_for_status()
-        if fp and not (_fingerprint(r1) == fp and _fingerprint(r2) == fp):
-            raise ValueError(f"PBS {name}: Zertifikat passt nicht zum Fingerprint")
-        ds, tasks = r1.json()["data"], r2.json()["data"]
+    if fp:
+        verify = await _pinned_context(name, url, fp)
+    try:
+        async with httpx.AsyncClient(timeout=10, verify=verify) as cli:
+            headers = {"Authorization": f"PBSAPIToken={token_id}:{secret}"}
+            r1 = (await cli.get(f"{url}/api2/json/status/datastore-usage", headers=headers)).raise_for_status()
+            r2 = (
+                await cli.get(f"{url}/api2/json/nodes/localhost/tasks", params={"running": 1, "limit": 20}, headers=headers)
+            ).raise_for_status()
+            ds, tasks = r1.json()["data"], r2.json()["data"]
+    except httpx.ConnectError as exc:
+        if fp and _pinned.pop((url, fp), None) and _cert_error(exc):
+            raise ValueError(f"PBS {name}: Zertifikat passt nicht zum Fingerprint") from None
+        raise
     return {
         "online": True,
         "checked": now().isoformat(timespec="seconds"),

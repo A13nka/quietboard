@@ -6,6 +6,38 @@ mit Quellcode, Installationspaket, `install.sh`, `compose.yaml`, SBOM und Prüfs
 
 ## Unveröffentlicht
 
+### Hinweis zum Update
+- `compose.yaml` neu herunterladen: Der App-Container läuft jetzt gehärtet (Dateisystem nur lesbar, keine
+  Linux-Capabilities, `no-new-privileges`). Geschrieben wird weiterhin nur nach `/data`.
+- Fehlt `HC_PING_ENDPOINT` in der `.env`, bekommen Hosts jetzt die Adresse der App mit Port 8000 statt
+  `localhost` (dort gingen alle Pings ins Leere).
+
+### Behoben
+- Meldungen werden außerhalb des Abrufs zugestellt: Ein hängender Mailserver oder ein langsamer Push-Dienst hält
+  weder den nächsten Abruf noch die Oberfläche auf. Push an mehrere Geräte geht gleichzeitig hinaus.
+- Nach dem Anlegen, Ändern, Pausieren oder Löschen eines Jobs zeigt die Oberfläche sofort den neuen Stand (vorher
+  manchmal den von vor der Änderung).
+- Namen vertrauter Proxys (`TRUSTED_PROXIES`, Beszel) werden im Hintergrund aufgelöst. Ein gestörter DNS-Server legt
+  die App nicht mehr lahm.
+- PBS mit Fingerprint: Das Zertifikat wird schon im TLS-Handshake geprüft. Das PBS-Token geht nie über eine
+  ungeprüfte Verbindung hinaus.
+- Update-Berichte: `kind` wird geprüft (a–z, 0–9, `-`, `_`, höchstens 20 Zeichen). Obergrenzen: 10 Berichtsarten je
+  Host, 500 Hosts. Ein fehlerhaftes Skript kann `updates.json` nicht mehr unbegrenzt wachsen lassen.
+- Nach einem Neuaufsetzen von Healthchecks liest die App die neuen Keys nach der ersten Ablehnung selbst ein.
+- Morgenmeldung: Scheitert die Zustellung, folgen die Versuche nach 5, 15 und 30 min statt alle 30 s. Ohne
+  eingerichteten Kanal wird es gar nicht erst versucht.
+- Ereignisse der letzten 24 h werden um die Zeitumstellung herum richtig erkannt. „Zuletzt gesehen“ von Hosts steht
+  in der eigenen Zeitzone.
+- Beszel: Die App meldet sich nicht mehr bei jedem Abruf neu an.
+- YAML-Import: höchstens 200 000 Zeichen, ohne Aliase (`*name`), ausgewertet außerhalb der Event-Loop.
+- Synology: Werte in `quietboard.conf` sind quotiert. Scheitert `synopkg`, meldet `dsm-report` einen Fehler statt
+  eines leeren Berichts, der das NAS „aktuell“ aussehen ließ.
+- Zugangsdaten (`beszel.json`) entstehen von Anfang an nur für die App lesbar und werden dauerhaft geschrieben.
+- Der Einrichtungscode steht höchstens einmal pro Minute im Log.
+
+### Geändert
+- Abhängigkeiten der CI aktualisiert (GitHub Actions, pytest 9, pre-commit 4.7).
+
 ## 0.9.1 – 2026-11-27
 
 ### Behoben
